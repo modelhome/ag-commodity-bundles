@@ -1,0 +1,18 @@
+# Keep the per-bundle build context lean. Build context is the bundle subfolder
+# (e.g. `cd corn-price && docker build .`), so this mostly matters for files
+# that would otherwise sneak in from a wider context.
+.git
+.gitignore
+.dockerignore
+.claude
+docs
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.venv
+**/run
+**/*.output.json
+**/.nass-cache
+**/.ers-cache
+.DS_Store
