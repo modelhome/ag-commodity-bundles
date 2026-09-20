@@ -251,7 +251,115 @@ implementation land together in one pull request:
 Repo-wide conventions live in this file; briefs reference them rather than
 restating them.
 
+## The `corn-price/` bundle
+
+**US Corn Price Impact.** Takes node 2's `corn_yield_snapshot` and returns the
+corn price impact the season's weather implies: each state's signal placed on a
+real-world scale, combined by production weight into a national yield and
+production shock, and the price response that implies under a fitted
+transmission, with an uncertainty range beside every price figure. Brief:
+`docs/features/0001-corn-price.md`; plan with every decision and its reasoning:
+`docs/plans/0001-corn-price.md`. User-facing documentation:
+[`corn-price/README.md`](./corn-price/README.md).
+
+```
+corn-price/
+  Modelfile.toml            one input (node 2's snapshot), two JSON outputs
+  Dockerfile                python:3.12-slim, no pip layer at all
+  runner.py                 the model
+  production_weights.csv    per-region production share and irrigation share
+  yield_history.csv         observed detrended state yields, 1995-2024 (300 rows)
+  price_history.csv         national balance sheet and price, 1975-2026 (52 rows)
+  transmission.json         the committed fit, its selection trail and bootstrap
+  *.meta.json               provenance for the three built tables
+  build_weights.py          one-time weights build (not in the image)
+  build_yield_history.py    one-time observed-yield build (not in the image)
+  build_price_history.py    one-time balance-sheet build (not in the image)
+  build_transmission.py     one-time fit (not in the image)
+  check_price.py            validation, needs Python 3.11+ (not in the image)
+  sample_input.json         a real ten-region node 2 output
+  README.md
+```
+
+### Design notes
+
+- **The rank is used, not the percentage. This is the one thing to understand
+  before changing anything here.** Node 2's `yield_anomaly_pct` comes from an
+  uncalibrated rainfed point simulation and is 3.1 to 11.7 times more dispersed
+  than the observed distribution of the same state's yield around trend. Its
+  *rank* survives that; its *magnitude* does not. Each region's
+  `yield_percentile_rank` is quantile-mapped onto that state's observed
+  1995-2024 detrended distribution. On the committed sample the unmapped
+  national figure would have been +3.70% against the +0.23% actually used.
+- **The mapping is median-centred**, because node 2's anomaly is median-relative
+  and a rank of 50 must therefore imply a zero shock. A least-squares trend
+  through a left-skewed yield series also sits below the median, so uncentred
+  quantiles would carry a standing positive offset (about +2.4 points in Ohio).
+- **The periods are coupled.** Node 2's baseline window and `yield_history.csv`
+  must be the same, or rank *n* stops meaning the same thing on both sides. The
+  runner refuses to start on a mismatch rather than answering wrongly.
+- **Weights are acres times trend yield, not 2022 production.** Combining
+  relative anomalies needs production weights, but 2022 actual production embeds
+  2022's own western drought. The trend also belongs here, since node 2's
+  baseline is fixed-weather by design.
+- **Coverage is stated and never scaled up.** 82.47% of US corn-for-grain
+  production, computed from the census by the build script. Running on a subset
+  reports that subset's coverage.
+- **The transmission is fitted here, not cited.** Roberts and Schlenker's
+  multiplier is for a permanent world shift; farmdoc's -1.84 is fitted against
+  market expectation rather than a weather baseline. Neither matches this input,
+  so both ship in the output as cited reference points that are not used.
+- **Term selection was by a rule fixed before the fits were run** (|t| >= 2.0),
+  applied to every candidate, and the whole trail is in `transmission.json`.
+- **Stocks-to-use did not survive, and that is reported as a finding.** Every
+  form tried came out at |t| < 0.1. The literature's convex relationship is about
+  the price *level*; this dependent variable is a *change*, which differences it
+  away. The model does not claim an amplification it cannot demonstrate.
+- **The interval is a bootstrap on the transmission coefficient**, not on the
+  price. It says how well the relationship is known from fifty years, not what
+  corn will do.
+- **No pip install layer.** Weighted sums, an empirical quantile and one
+  coefficient. The standard library is enough.
+
+### Verified results (2026-09-20)
+
+- `check_price.py`: **63/63 checks pass**.
+- **The 2012 drought, end to end:** feeding each state's actual 2012 rank
+  reproduces a US yield shock of **-22.04%** against the actual national
+  deviation of **-22.23%**. That validates the mapping, the weighting and the
+  coverage assumption against a real outcome rather than against themselves.
+- A tenth-percentile season everywhere: -9.72% US shock, **+7.91%** [+3.90,
+  +13.13] price impact. Right sign, plausible size.
+- Sample run (ten regions, real node 1 -> node 2 chain): covered shock +0.28%,
+  US shock +0.23% over 82.5% of production, price impact **-0.18%** [-0.29,
+  -0.09] = -$0.009/bu on $4.80. Under a second.
+- **Transmission:** `dlog_price = a + b0*d + c*d[t-1]`, 1976-2025, n=50.
+  b0 = **-0.7826** (se 0.2834, t -2.76), bootstrap 95% [-1.269, -0.393],
+  R^2 0.329.
+- **Docker build and run** produce output **identical** to the local run apart
+  from `generated_at`, with `--network none`.
+- **Modelfile validates** (`OK`, no annotation warnings), and
+  `check_schema_compatibility` confirms the input binds node 2's
+  `corn_yield_snapshot` and is refused by `corn_yield_trajectory`.
+- **Not yet verified:** the Model Home import, which needs a signed-in human at
+  the Auth0 login.
+
+### Task list
+
+1. Add the model on the local Model Home stack from the branch subfolder URL and
+   run it with a node 2 output; mark the PR ready once it passes.
+2. After merge: register on Model Home from `main` and compose it after the US
+   Corn Yield model in the daily flow.
+3. Follow-ups, detailed in the bundle README: a live or market reference price
+   (three routes, cheapest first), five-year average production weights, a
+   within-season futures transmission, and stocks-to-use revisited in a
+   price-level specification.
+
 ## Task list
 
-1. Create `modelhome/ag-commodity-bundles` on GitHub and push `main`.
-2. Build `corn-price/` (brief `docs/features/0001-corn-price.md`).
+1. ~~Create `modelhome/ag-commodity-bundles` on GitHub and push `main`.~~ Done
+   2026-09-20.
+2. Finish `corn-price/` (brief 0001): see that bundle's task list above.
+3. Upstream follow-up for `wofost-bundles/corn-yield`: an irrigation-aware run
+   for Nebraska and Kansas. Quantile mapping here compresses the rainfed bias but
+   cannot fix a misranked season, and that is node 2's to fix.

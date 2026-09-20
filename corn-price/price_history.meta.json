@@ -1,0 +1,31 @@
+{
+  "vintage": "USDA ERS Feed Grains Database, Feed Grains Yearbook Tables -- All Years",
+  "source": "https://www.ers.usda.gov/media/5766/feed-grains-yearbook-tables-all-years.csv",
+  "source_last_modified": null,
+  "tables": [
+    "Table 1--Corn, sorghum, barley, and oats",
+    "Table 4--Corn: Supply and disappearance"
+  ],
+  "marketing_year": "Sep-Aug",
+  "period": "1975-2026",
+  "latest_complete_marketing_year": 2025,
+  "built_at": "2026-09-20T03:19:01+00:00",
+  "national_yield_trend": {
+    "intercept_bu_acre": -3631.25867,
+    "slope_bu_acre_per_year": 1.883475,
+    "r2": 0.878,
+    "fitted_over": "1975-2025"
+  },
+  "defaults": {
+    "reference_price_usd_bu": 4.8,
+    "reference_price_year": 2026,
+    "reference_price_is_projection": true,
+    "carryin_stocks_to_use": 0.115218,
+    "carryin_stocks_to_use_year": 2026
+  },
+  "definitions": {
+    "stocks_to_use": "ending stocks / total use, same marketing year; endogenous to that season's yield and therefore not used to condition it",
+    "carryin_stocks_to_use": "the prior marketing year's stocks_to_use; predetermined at planting and the conditioner the transmission uses"
+  },
+  "note": "The current marketing year is a WASDE projection, flagged is_projection and excluded from the trend fit and the transmission fit. It is the source of the runner's default reference price and carry-in ratio."
+}

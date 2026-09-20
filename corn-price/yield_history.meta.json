@@ -1,0 +1,76 @@
+{
+  "vintage": "USDA NASS Quick Stats survey series",
+  "source": "https://www.nass.usda.gov/datasets/qs.crops_20260919.txt.gz",
+  "source_file": "qs.crops_20260919.txt.gz",
+  "source_last_modified": null,
+  "series": "CORN, GRAIN - YIELD, MEASURED IN BU / ACRE",
+  "selector": "AGG_LEVEL_DESC=STATE, SOURCE_DESC=SURVEY, FREQ_DESC=ANNUAL, REFERENCE_PERIOD_DESC=YEAR (final estimate, not an in-season forecast)",
+  "period": "1995-2024",
+  "period_start": 1995,
+  "period_end": 2024,
+  "built_at": "2026-09-20T03:16:45+00:00",
+  "detrending": "per-state ordinary least squares of yield on calendar year; deviation_pct is the residual as a percentage of the fitted line",
+  "trends": {
+    "ia": {
+      "intercept_bu_acre": -4645.902039,
+      "slope_bu_acre_per_year": 2.39733,
+      "r2": 0.7592,
+      "rmse_bu_acre": 11.686
+    },
+    "il": {
+      "intercept_bu_acre": -5468.462588,
+      "slope_bu_acre_per_year": 2.805339,
+      "r2": 0.6649,
+      "rmse_bu_acre": 17.239
+    },
+    "mn": {
+      "intercept_bu_acre": -3870.933111,
+      "slope_bu_acre_per_year": 2.007564,
+      "r2": 0.7075,
+      "rmse_bu_acre": 11.174
+    },
+    "ne": {
+      "intercept_bu_acre": -4121.627512,
+      "slope_bu_acre_per_year": 2.131257,
+      "r2": 0.7451,
+      "rmse_bu_acre": 10.79
+    },
+    "in": {
+      "intercept_bu_acre": -4743.228254,
+      "slope_bu_acre_per_year": 2.439377,
+      "r2": 0.6304,
+      "rmse_bu_acre": 16.168
+    },
+    "sd": {
+      "intercept_bu_acre": -4213.785465,
+      "slope_bu_acre_per_year": 2.160845,
+      "r2": 0.652,
+      "rmse_bu_acre": 13.664
+    },
+    "oh": {
+      "intercept_bu_acre": -4408.48224,
+      "slope_bu_acre_per_year": 2.270523,
+      "r2": 0.6096,
+      "rmse_bu_acre": 15.726
+    },
+    "wi": {
+      "intercept_bu_acre": -4020.984056,
+      "slope_bu_acre_per_year": 2.075417,
+      "r2": 0.7725,
+      "rmse_bu_acre": 9.748
+    },
+    "ks": {
+      "intercept_bu_acre": 714.075788,
+      "slope_bu_acre_per_year": -0.289878,
+      "r2": 0.0327,
+      "rmse_bu_acre": 13.641
+    },
+    "mo": {
+      "intercept_bu_acre": -3712.827957,
+      "slope_bu_acre_per_year": 1.916129,
+      "r2": 0.3933,
+      "rmse_bu_acre": 20.6
+    }
+  },
+  "note": "The period must match node 2's baseline window (1995-2024), because a percentile rank from node 2 is read as the same quantile of this distribution. The runner refuses to run if the two disagree."
+}

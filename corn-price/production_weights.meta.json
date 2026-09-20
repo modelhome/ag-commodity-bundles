@@ -1,0 +1,27 @@
+{
+  "vintage": "USDA NASS 2022 Census of Agriculture",
+  "source": "https://www.nass.usda.gov/datasets/qs.census2022.txt.gz",
+  "source_last_modified": "Wed, 14 Feb 2024 19:25:51 GMT",
+  "series": [
+    "CORN, GRAIN - ACRES HARVESTED",
+    "CORN, GRAIN - PRODUCTION, MEASURED IN BU",
+    "CORN, GRAIN, IRRIGATED - ACRES HARVESTED"
+  ],
+  "built_at": "2026-09-20T03:11:02+00:00",
+  "us_production_bu": 13722442966.0,
+  "coverage_share_of_us": 0.824706,
+  "regions": [
+    "ia",
+    "il",
+    "in",
+    "ks",
+    "mn",
+    "mo",
+    "ne",
+    "oh",
+    "sd",
+    "wi"
+  ],
+  "withheld": [],
+  "note": "Region keys originate in agromet-bundles/crop-weather/regions.csv and are not redefined here. A NASS (D) value means the figure was withheld for disclosure and is recorded as missing, never as zero."
+}

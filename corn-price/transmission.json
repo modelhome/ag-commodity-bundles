@@ -1,0 +1,462 @@
+{
+  "specification": "dlog_price[t] = a + b0 * d[t] + c_deviation_lag * deviation_lag[t]; d = national yield deviation from a fitted linear trend, as a fraction",
+  "reported_effect": "b0 * d: the marginal price response to this season's shock, holding the other terms fixed. Deliberately NOT a prediction of the price change, which would require the rest of the balance sheet, demand, policy and the macro environment. The other terms are controls and do not enter the reported impact.",
+  "selection_rule": "forward selection: a candidate term is kept only if |t| >= 2.0. The rule was fixed before the fits were run and applied to every candidate.",
+  "candidates": [
+    {
+      "term": "deviation_lag",
+      "description": "last season's shock; with a differenced dependent variable it mechanically enters this season's change",
+      "coefficient": 0.9690915495685596,
+      "t": 3.4207382242172555,
+      "r2_with_term": 0.328940679814806,
+      "kept": true,
+      "reason": "|t| = 3.42 >= 2.0"
+    },
+    {
+      "term": "shock_over_carryin",
+      "description": "shock divided by carry-in stocks-to-use: the convex tight-stocks interaction",
+      "coefficient": -0.001189374876201743,
+      "t": -0.016259628526287546,
+      "r2_with_term": 0.32894453656778344,
+      "kept": false,
+      "reason": "|t| = 0.02 < 2.0"
+    },
+    {
+      "term": "shock_times_log_carryin",
+      "description": "shock times log carry-in: the same interaction in a gentler functional form",
+      "coefficient": -0.004225717481291191,
+      "t": -0.010764469870407769,
+      "r2_with_term": 0.32894237020622674,
+      "kept": false,
+      "reason": "|t| = 0.01 < 2.0"
+    },
+    {
+      "term": "log_carryin",
+      "description": "log carry-in on its own: a level shift rather than an interaction",
+      "coefficient": 0.0024832323697810132,
+      "t": 0.049905320016301394,
+      "r2_with_term": 0.32897701047229533,
+      "kept": false,
+      "reason": "|t| = 0.05 < 2.0"
+    }
+  ],
+  "terms": [
+    "intercept",
+    "shock",
+    "deviation_lag"
+  ],
+  "coefficients": {
+    "intercept": 0.010563324902938976,
+    "shock": -0.7825520359332103,
+    "deviation_lag": 0.9690915495685596
+  },
+  "standard_errors": {
+    "intercept": 0.0234287038138547,
+    "shock": 0.2833903176253829,
+    "deviation_lag": 0.283298950708311
+  },
+  "t_statistics": {
+    "intercept": 0.45087107621772454,
+    "shock": -2.7613929879131414,
+    "deviation_lag": 3.4207382242172555
+  },
+  "shock_coefficient": -0.7825520359332103,
+  "shock_coefficient_ci95": [
+    -1.269287697737908,
+    -0.39320352506264705
+  ],
+  "bootstrap": {
+    "draws": 10000,
+    "seed": 20260919,
+    "method": "nonparametric pairs bootstrap, 2.5th and 97.5th percentiles of b0"
+  },
+  "fit": {
+    "n": 50,
+    "df": 47,
+    "r2": 0.328940679814806,
+    "adj_r2": 0.3003849640622446,
+    "residual_sd_dlog": 0.1656598401460886,
+    "sample_period": "1976-2025",
+    "residual_quantiles_dlog": {
+      "p05": -0.2201735029154304,
+      "p50": -0.021631251211415688,
+      "p95": 0.28550646439134486
+    }
+  },
+  "interval_definition": "The reported low and high come from the bootstrap 95% interval on b0, the transmission coefficient. They express how well the transmission itself is known from fifty annual observations. They are NOT an interval on what the corn price will do: the fit explains 33% of year-on-year price variation, so most of what moves the price is outside this model entirely.",
+  "stocks_to_use_finding": "Every stocks-to-use form tried -- shock divided by carry-in, shock times log carry-in, and log carry-in alone -- came out statistically indistinguishable from zero (|t| < 0.1 in each case). This is not a refutation of the well-documented convex relationship between stocks-to-use and the price LEVEL: the dependent variable here is a year-on-year CHANGE, which differences that level relationship away. The interaction is therefore absent from the shipped model, and the model does not claim a tight-stocks amplification it cannot demonstrate.",
+  "not_captured": [
+    "cross-commodity substitution: soybean and wheat prices move too, and corn acreage responds in the following season",
+    "the ethanol and export demand channels separately; the reduced form sees only their aggregate",
+    "basis and the futures curve; the fit is on a cash marketing-year average price",
+    "policy shocks, including changes to the Renewable Fuel Standard",
+    "when within the season the price moves; this is an annual relationship"
+  ],
+  "reference_estimates_not_used": {
+    "roberts_schlenker_2013": "Supply elasticity 0.087-0.116, demand -0.028 to -0.066 (Table 1, FAO data), implying a price multiplier 1/(beta_s - beta_d) of 5.75-7.73. Derived for a permanent shift in world caloric supply, not a transitory weather shock, so it is not applied here.",
+    "farmdoc_daily_2018": "-1.84 percent price change per percent yield change, R-squared 0.48, 1993-2017, December corn futures against the May-to-November WASDE yield change. Its regressor is the surprise against market expectation, not against a weather baseline, so it is not applied here."
+  },
+  "sources": [
+    "USDA ERS Feed Grains Database, Feed Grains Yearbook Tables -- All Years",
+    "Roberts, M. J. and W. Schlenker (2013), American Economic Review 103(6), 2265-95",
+    "farmdoc daily (8):212, University of Illinois, 15 November 2018"
+  ],
+  "price_history_vintage": {
+    "source": "https://www.ers.usda.gov/media/5766/feed-grains-yearbook-tables-all-years.csv",
+    "source_last_modified": null,
+    "built_at": "2026-09-20T03:19:01+00:00"
+  },
+  "built_at": "2026-09-20T03:22:07+00:00",
+  "sample": [
+    {
+      "year": 1976,
+      "deviation": -0.028022,
+      "deviation_lag": -0.024888,
+      "carryin": 0.109796,
+      "dlog_price": -0.166696
+    },
+    {
+      "year": 1977,
+      "deviation": -0.01702,
+      "deviation_lag": -0.028022,
+      "carryin": 0.196158,
+      "dlog_price": -0.06237
+    },
+    {
+      "year": 1978,
+      "deviation": 0.071554,
+      "deviation_lag": -0.01702,
+      "carryin": 0.23133,
+      "dlog_price": 0.107833
+    },
+    {
+      "year": 1979,
+      "deviation": 0.138974,
+      "deviation_lag": 0.071554,
+      "carryin": 0.244372,
+      "dlog_price": 0.113329
+    },
+    {
+      "year": 1980,
+      "deviation": -0.071643,
+      "deviation_lag": 0.138974,
+      "carryin": 0.267528,
+      "dlog_price": 0.210364
+    },
+    {
+      "year": 1981,
+      "deviation": 0.090024,
+      "deviation_lag": -0.071643,
+      "carryin": 0.191158,
+      "dlog_price": -0.218332
+    },
+    {
+      "year": 1982,
+      "deviation": 0.112098,
+      "deviation_lag": 0.090024,
+      "carryin": 0.363686,
+      "dlog_price": 0.019803
+    },
+    {
+      "year": 1983,
+      "deviation": -0.217733,
+      "deviation_lag": 0.112098,
+      "carryin": 0.486006,
+      "dlog_price": 0.230178
+    },
+    {
+      "year": 1984,
+      "deviation": 0.010833,
+      "deviation_lag": -0.217733,
+      "carryin": 0.150357,
+      "dlog_price": -0.199287
+    },
+    {
+      "year": 1985,
+      "deviation": 0.098288,
+      "deviation_lag": 0.010833,
+      "carryin": 0.234387,
+      "dlog_price": -0.164982
+    },
+    {
+      "year": 1986,
+      "deviation": 0.092172,
+      "deviation_lag": 0.098288,
+      "carryin": 0.622036,
+      "dlog_price": -0.396536
+    },
+    {
+      "year": 1987,
+      "deviation": 0.077271,
+      "deviation_lag": 0.092172,
+      "carryin": 0.660997,
+      "dlog_price": 0.257223
+    },
+    {
+      "year": 1988,
+      "deviation": -0.251926,
+      "deviation_lag": 0.077271,
+      "carryin": 0.549041,
+      "dlog_price": 0.269476
+    },
+    {
+      "year": 1989,
+      "deviation": 0.011534,
+      "deviation_lag": -0.251926,
+      "carryin": 0.265895,
+      "dlog_price": -0.073502
+    },
+    {
+      "year": 1990,
+      "deviation": 0.014057,
+      "deviation_lag": 0.011534,
+      "carryin": 0.165577,
+      "dlog_price": -0.034486
+    },
+    {
+      "year": 1991,
+      "deviation": -0.085403,
+      "deviation_lag": 0.014057,
+      "carryin": 0.19602,
+      "dlog_price": 0.038715
+    },
+    {
+      "year": 1992,
+      "deviation": 0.090162,
+      "deviation_lag": -0.085403,
+      "carryin": 0.13901,
+      "dlog_price": -0.135341
+    },
+    {
+      "year": 1993,
+      "deviation": -0.178011,
+      "deviation_lag": 0.090162,
+      "carryin": 0.249434,
+      "dlog_price": 0.188742
+    },
+    {
+      "year": 1994,
+      "deviation": 0.114226,
+      "deviation_lag": -0.178011,
+      "carryin": 0.111547,
+      "dlog_price": -0.100926
+    },
+    {
+      "year": 1995,
+      "deviation": -0.101322,
+      "deviation_lag": 0.114226,
+      "carryin": 0.166572,
+      "dlog_price": 0.360209
+    },
+    {
+      "year": 1996,
+      "deviation": -0.00831,
+      "deviation_lag": -0.101322,
+      "carryin": 0.049827,
+      "dlog_price": -0.178625
+    },
+    {
+      "year": 1997,
+      "deviation": -0.025759,
+      "deviation_lag": -0.00831,
+      "carryin": 0.100489,
+      "dlog_price": -0.109057
+    },
+    {
+      "year": 1998,
+      "deviation": 0.019044,
+      "deviation_lag": -0.025759,
+      "carryin": 0.148766,
+      "dlog_price": -0.225203
+    },
+    {
+      "year": 1999,
+      "deviation": -0.000123,
+      "deviation_lag": 0.019044,
+      "carryin": 0.192183,
+      "dlog_price": -0.063851
+    },
+    {
+      "year": 2000,
+      "deviation": 0.0087,
+      "deviation_lag": -0.000123,
+      "carryin": 0.180514,
+      "dlog_price": 0.016349
+    },
+    {
+      "year": 2001,
+      "deviation": 0.004417,
+      "deviation_lag": 0.0087,
+      "carryin": 0.194974,
+      "dlog_price": 0.062848
+    },
+    {
+      "year": 2002,
+      "deviation": -0.072596,
+      "deviation_lag": 0.004417,
+      "carryin": 0.162645,
+      "dlog_price": 0.163534
+    },
+    {
+      "year": 2003,
+      "deviation": 0.005972,
+      "deviation_lag": -0.072596,
+      "carryin": 0.114495,
+      "dlog_price": 0.0422
+    },
+    {
+      "year": 2004,
+      "deviation": 0.11945,
+      "deviation_lag": 0.005972,
+      "carryin": 0.093655,
+      "dlog_price": -0.161062
+    },
+    {
+      "year": 2005,
+      "deviation": 0.019449,
+      "deviation_lag": 0.11945,
+      "carryin": 0.198299,
+      "dlog_price": -0.029559
+    },
+    {
+      "year": 2006,
+      "deviation": 0.014238,
+      "deviation_lag": 0.019449,
+      "carryin": 0.174582,
+      "dlog_price": 0.41871
+    },
+    {
+      "year": 2007,
+      "deviation": 0.012195,
+      "deviation_lag": 0.014238,
+      "carryin": 0.116328,
+      "dlog_price": 0.323227
+    },
+    {
+      "year": 2008,
+      "deviation": 0.016715,
+      "deviation_lag": 0.012195,
+      "carryin": 0.12751,
+      "dlog_price": -0.033902
+    },
+    {
+      "year": 2009,
+      "deviation": 0.076938,
+      "deviation_lag": 0.016715,
+      "carryin": 0.139355,
+      "dlog_price": -0.134235
+    },
+    {
+      "year": 2010,
+      "deviation": -0.012734,
+      "deviation_lag": 0.076938,
+      "carryin": 0.130955,
+      "dlog_price": 0.377857
+    },
+    {
+      "year": 2011,
+      "deviation": -0.061404,
+      "deviation_lag": -0.012734,
+      "carryin": 0.086521,
+      "dlog_price": 0.182965
+    },
+    {
+      "year": 2012,
+      "deviation": -0.222298,
+      "deviation_lag": -0.061404,
+      "carryin": 0.079237,
+      "dlog_price": 0.102301
+    },
+    {
+      "year": 2013,
+      "deviation": -0.012746,
+      "deviation_lag": -0.222298,
+      "carryin": 0.074095,
+      "dlog_price": -0.434922
+    },
+    {
+      "year": 2014,
+      "deviation": 0.05511,
+      "deviation_lag": -0.012746,
+      "carryin": 0.091552,
+      "dlog_price": -0.186816
+    },
+    {
+      "year": 2015,
+      "deviation": 0.027417,
+      "deviation_lag": 0.05511,
+      "carryin": 0.125906,
+      "dlog_price": -0.024625
+    },
+    {
+      "year": 2016,
+      "deviation": 0.053028,
+      "deviation_lag": 0.027417,
+      "carryin": 0.12713,
+      "dlog_price": -0.071767
+    },
+    {
+      "year": 2017,
+      "deviation": 0.052911,
+      "deviation_lag": 0.053028,
+      "carryin": 0.156552,
+      "dlog_price": 0.0
+    },
+    {
+      "year": 2018,
+      "deviation": 0.040379,
+      "deviation_lag": 0.052911,
+      "carryin": 0.144633,
+      "dlog_price": 0.071767
+    },
+    {
+      "year": 2019,
+      "deviation": -0.023032,
+      "deviation_lag": 0.040379,
+      "carryin": 0.15695,
+      "dlog_price": -0.013947
+    },
+    {
+      "year": 2020,
+      "deviation": -0.011097,
+      "deviation_lag": -0.023032,
+      "carryin": 0.144794,
+      "dlog_price": 0.240961
+    },
+    {
+      "year": 2021,
+      "deviation": 0.008329,
+      "deviation_lag": -0.011097,
+      "carryin": 0.08296,
+      "dlog_price": 0.281038
+    },
+    {
+      "year": 2022,
+      "deviation": -0.020829,
+      "deviation_lag": 0.008329,
+      "carryin": 0.092411,
+      "dlog_price": 0.086178
+    },
+    {
+      "year": 2023,
+      "deviation": -0.009369,
+      "deviation_lag": -0.020829,
+      "carryin": 0.099242,
+      "dlog_price": -0.36281
+    },
+    {
+      "year": 2024,
+      "deviation": -0.008713,
+      "deviation_lag": -0.009369,
+      "carryin": 0.117829,
+      "dlog_price": -0.070564
+    },
+    {
+      "year": 2025,
+      "deviation": 0.020414,
+      "deviation_lag": -0.008713,
+      "carryin": 0.102561,
+      "dlog_price": -0.021455
+    }
+  ]
+}
