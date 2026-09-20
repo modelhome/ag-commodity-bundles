@@ -1,0 +1,410 @@
+name = "US Corn Price Impact"
+description = "What this season's weather is doing to the corn price. Takes the state-by-state yield reading from the US Corn Yield model and works out what it means for the market: it puts each state's signal on a real-world scale by comparing where the season ranks against thirty years of that state's actual yields, weights the states by how much corn they grow, and turns the resulting national shortfall or surplus into the corn price move it implies. Every figure comes with the range around it and the assumptions behind it. Built to run once a day, straight after the yield model."
+# Prints the corn_price_impact document JSON to stdout; the platform redirects
+# it to the output file. The runner writes corn_price_regions itself, to the
+# path in args.
+run = "docker run --rm -v \"$PWD/run:/run\" ${IMAGE} ${ARGS} > run/corn_price_impact.output.json"
+image = "modelhome/ag-commodity-corn-price:latest"
+args = ["{input:corn_yield_snapshot}", "{output:corn_price_regions}"]
+
+# Semantic annotations. Determinism: like the upstream yield model and unlike the
+# weather model at the head of the flow, this one makes no network calls at run
+# time. Given the same input document it is exactly reproducible -- the
+# production weights, the observed yield history, the price history and the
+# fitted transmission are all committed beside the runner, built once by scripts
+# that are not in the image. The runner refuses to start if the upstream model's
+# baseline window is not the window the yield history was built on, because a
+# percentile rank from one cannot be read against the other.
+determinism = "deterministic"
+expected_runtime = "seconds"
+validity_domain = "US corn, in season, at national scale. Built from the ten states the upstream weather model covers, which are 82.5% of US corn-for-grain production; the rest is assumed to be at trend and the coverage share is reported. The upstream yield signal is used as a rank, not a magnitude, because it is a rainfed simulation several times more dispersed than real yields; in heavily irrigated states, mainly Nebraska and Kansas, a rank can still be too low. The transmission is an annual reduced form fitted on 50 years and explains about a third of year-on-year price variation. See the README."
+not_for = "This is NOT a price forecast, NOT a trading signal and NOT investment advice, and must not be used as any of them. It is the price impact implied by one weather-driven production shock under one stated transmission, holding everything else equal -- demand, policy, the macro environment, the rest of the balance sheet and every other crop are outside it. Not for field-level or farm-level decisions, and not a substitute for USDA WASDE. Off-season output is valid but near zero by construction."
+provenance = "Upstream: the US Corn Yield model. Production weights and irrigation shares: USDA NASS 2022 Census of Agriculture. Observed state yields 1995-2024: USDA NASS survey series. National balance sheet and prices: USDA ERS Feed Grains Yearbook Tables. Transmission fitted here on 1976-2025; Roberts and Schlenker (2013) and farmdoc daily (2018) ship in the output as cited reference points not used."
+
+[resources]
+# Reading four small committed tables and doing arithmetic over ten rows. The
+# thirty-year fits and the bootstrap are precomputed, not run here.
+memory = "256Mi"
+cpu = "0.5"
+
+[[inputs]]
+# The whole input is the upstream model's corn_yield_snapshot output. Flow steps
+# bind by required-key set, and ["metadata", "columns", "rows"] matches
+# corn_yield_snapshot rather than corn_yield_trajectory, whose required keys are
+# generated_at / metadata / regions.
+#
+# There is deliberately no `default` here. The convention in these bundles is
+# that a schema default is a runnable "Example to paste", and a runnable example
+# for this model is a full per-region snapshot including the upstream model's
+# baseline metadata -- too large to paste. This model is meant to be run after
+# the yield model in a flow, which supplies the whole input.
+name = "corn_yield_snapshot"
+description = "The per-region yield table from the US Corn Yield model. In a flow this is wired straight from that model's output; nothing else needs filling in."
+
+[inputs.schema]
+type = "object"
+required = ["metadata", "columns", "rows"]
+description = "A US Corn Yield snapshot. The regions to report on are read from it, so this model never defines its own."
+
+[inputs.schema.properties.metadata]
+type = "object"
+description = "The upstream run's metadata. The reporting date, the thirty-year baseline window and each region's baseline spread are read from it."
+
+[inputs.schema.properties.columns]
+type = "array"
+description = "Column names from the upstream table."
+
+[inputs.schema.properties.rows]
+type = "array"
+description = "One row per region."
+
+[inputs.schema.properties.rows.items]
+# A subset of the upstream model's own required keys, which is what the
+# platform's subset rule needs for the two to bind.
+type = "object"
+required = ["region_key", "state", "date", "yield_anomaly_pct", "yield_percentile_rank"]
+description = "One region's yield reading."
+
+# Declared in full because flow steps bind by shape: the platform compares these
+# types against the upstream model's own output properties, so anything left
+# undeclared is simply unchecked at wiring time.
+[inputs.schema.properties.rows.items.properties.region_key]
+type = "string"
+description = "The region's stable identifier, e.g. ia. Set by the weather model at the head of the flow; this model joins its own tables on it and stops if it meets one it has no row for."
+
+[inputs.schema.properties.rows.items.properties.state]
+type = "string"
+description = "Two-letter state code, carried through to the output."
+
+[inputs.schema.properties.rows.items.properties.date]
+type = "string"
+format = "date"
+description = "The day the upstream reading describes."
+
+[inputs.schema.properties.rows.items.properties.yield_anomaly_pct]
+type = "number"
+unit = "%"
+description = "How far above or below a normal year the upstream model puts this season's yield. Reported here for comparison, but NOT used as a magnitude: it comes from a rainfed simulation whose spread is several times a real yield's."
+
+[inputs.schema.properties.rows.items.properties.yield_percentile_rank]
+type = "number"
+unit = "%"
+description = "Where the upstream model puts this season among the last thirty. This is what drives the calculation, because a rank survives the simulation's scale problem where a percentage does not."
+
+# A key INSIDE the upstream document, not a separate input, so it is settable
+# only when you compose the input yourself -- running the bundle standalone, or
+# from a hand-written document. In a flow the upstream model supplies this
+# document verbatim, so a flow always gets the committed default. Making it
+# overridable in a flow needs a second declared [[inputs]], and the platform
+# requires every input of a non-first step to be wired, so that would force
+# every flow author to supply a price. The percentage impact needs no price at
+# all; only the dollar figures do. See "Future work" in the README.
+[inputs.schema.properties.reference_price_usd_bu]
+type = "number"
+unit = "$/bu"
+description = "The corn price the dollar figures are worked out against, if you are composing the input document yourself. Leave it out -- as a flow always does -- to use the latest USDA season-average price in the committed table."
+
+[[outputs]]
+# The headline document: the national result, the per-region contributions, and
+# every assumption as data rather than prose in a README.
+name = "corn_price_impact"
+description = "The corn price impact this season's weather implies: the national yield and production shock, the price move that implies with its range, what each state contributed, and the assumptions behind all of it."
+
+[outputs.schema]
+type = "object"
+required = ["generated_at", "metadata", "national", "regions", "assumptions"]
+description = "The price impact implied by the upstream yield reading. Not a forecast."
+
+[outputs.schema.properties.generated_at]
+type = "string"
+format = "date-time"
+description = "When the output was written (UTC)."
+
+[outputs.schema.properties.metadata]
+type = "object"
+description = "How the run was made: the transmission and its fit, every committed table's source and vintage, the reference price and where it came from, the carry-in stocks-to-use for context, and the upstream run this came from."
+
+[outputs.schema.properties.national]
+type = "object"
+# Each headline figure is required together with its _low and _high, so a number
+# cannot ship without its range even by accident.
+required = [
+  "date",
+  "coverage_share_of_us_production",
+  "covered_yield_shock_pct",
+  "us_yield_shock_pct",
+  "us_production_shock_bu",
+  "price_impact_pct", "price_impact_pct_low", "price_impact_pct_high",
+  "reference_price_usd_bu",
+  "price_impact_usd_bu", "price_impact_usd_bu_low", "price_impact_usd_bu_high",
+]
+description = "The national result."
+
+[outputs.schema.properties.national.properties.date]
+type = "string"
+format = "date"
+description = "The day this result describes."
+
+[outputs.schema.properties.national.properties.regions_covered]
+type = "integer"
+description = "How many regions the input carried."
+
+[outputs.schema.properties.national.properties.coverage_share_of_us_production]
+type = "number"
+description = "The share of US corn-for-grain production the regions present account for, from 0 to 1. The national figures are built from these states only and the rest is assumed to be at trend; nothing is scaled up to the whole country."
+
+[outputs.schema.properties.national.properties.covered_yield_shock_pct]
+type = "number"
+unit = "%"
+description = "How far this season's yield sits above or below normal across the states covered, weighted by how much corn each grows."
+
+[outputs.schema.properties.national.properties.us_yield_shock_pct]
+type = "number"
+unit = "%"
+description = "The same figure as a share of the whole US crop, taking the states not covered to be at trend. This is what the price response is worked out from."
+
+[outputs.schema.properties.national.properties.us_yield_shock_pct_unmapped]
+type = "number"
+unit = "%"
+description = "What the figure above would have been using the upstream percentages directly, without putting them on a real-world scale. Shown so the size of that correction is visible; it is not used for anything."
+
+[outputs.schema.properties.national.properties.covered_trend_production_bu]
+type = "number"
+unit = "bu"
+description = "What the covered states would produce in a normal year at this year's trend yields."
+
+[outputs.schema.properties.national.properties.covered_production_shock_bu]
+type = "number"
+unit = "bu"
+description = "How many bushels above or below that the season implies."
+
+[outputs.schema.properties.national.properties.us_trend_production_bu]
+type = "number"
+unit = "bu"
+description = "The same normal-year figure for the whole US crop."
+
+[outputs.schema.properties.national.properties.us_production_shock_bu]
+type = "number"
+unit = "bu"
+description = "The national shortfall or surplus in bushels. The uncovered states contribute nothing to it, by assumption."
+
+[outputs.schema.properties.national.properties.price_impact_pct]
+type = "number"
+unit = "%"
+description = "How much the corn price moves because of this shock, holding everything else equal. Not a forecast of the price: most of what moves corn is outside this model."
+
+[outputs.schema.properties.national.properties.price_impact_pct_low]
+type = "number"
+unit = "%"
+description = "The low end, from the range the transmission strength itself is known to."
+
+[outputs.schema.properties.national.properties.price_impact_pct_high]
+type = "number"
+unit = "%"
+description = "The high end of that same range."
+
+[outputs.schema.properties.national.properties.reference_price_usd_bu]
+type = "number"
+unit = "$/bu"
+description = "The corn price the dollar figures are worked out against."
+
+[outputs.schema.properties.national.properties.price_impact_usd_bu]
+type = "number"
+unit = "$/bu"
+description = "The same impact in dollars a bushel."
+
+[outputs.schema.properties.national.properties.price_impact_usd_bu_low]
+type = "number"
+unit = "$/bu"
+description = "The low end in dollars a bushel."
+
+[outputs.schema.properties.national.properties.price_impact_usd_bu_high]
+type = "number"
+unit = "$/bu"
+description = "The high end in dollars a bushel."
+
+[outputs.schema.properties.regions]
+type = "array"
+description = "One entry per region: its rank, what that maps to on a real-world scale, how much corn it grows and what it contributed to the national figure."
+
+[outputs.schema.properties.regions.items]
+type = "object"
+required = ["region_key", "state", "yield_percentile_rank", "yield_anomaly_real_pct", "production_weight", "contribution_pct"]
+description = "One region's contribution."
+
+[outputs.schema.properties.regions.items.properties.region_key]
+type = "string"
+description = "The region's stable identifier."
+
+[outputs.schema.properties.regions.items.properties.state]
+type = "string"
+description = "Two-letter state code."
+
+[outputs.schema.properties.regions.items.properties.date]
+type = "string"
+format = "date"
+description = "The day this reading describes."
+
+[outputs.schema.properties.regions.items.properties.yield_percentile_rank]
+type = "number"
+unit = "%"
+description = "Where the upstream model put this season among the last thirty, e.g. 70 means it beats seven years in ten."
+
+[outputs.schema.properties.regions.items.properties.yield_anomaly_simulated_pct]
+type = "number"
+unit = "%"
+description = "The upstream model's own percentage, shown for comparison only."
+
+[outputs.schema.properties.regions.items.properties.yield_anomaly_real_pct]
+type = "number"
+unit = "%"
+description = "What that rank means against thirty years of this state's actual yields: the number that is actually used. An average season comes out at zero."
+
+[outputs.schema.properties.regions.items.properties.dispersion_ratio]
+type = "number"
+# The schema format has no nullable type, so this key is OMITTED rather than set
+# to null when the upstream document carries no baseline quantiles for a region.
+description = "How much wider the upstream model's spread of yields is than this state's real one. Above 1 everywhere, and largest in the irrigated states, which is why the rank is used instead of the percentage. Absent when the upstream document does not report a baseline spread for the region."
+
+[outputs.schema.properties.regions.items.properties.production_weight]
+type = "number"
+description = "This state's share of the covered states' normal-year production, from 0 to 1."
+
+[outputs.schema.properties.regions.items.properties.contribution_pct]
+type = "number"
+unit = "%"
+description = "What this state contributed to the covered yield shock: its weight times its real anomaly."
+
+[outputs.schema.properties.regions.items.properties.production_share_of_us]
+type = "number"
+description = "This state's share of all US corn-for-grain production, from 0 to 1."
+
+[outputs.schema.properties.regions.items.properties.irrigated_share]
+type = "number"
+# Same rule: USDA withholds a figure that would identify an operation, and the
+# key is omitted rather than set to null. It is never read as zero -- that would
+# say "this state does not irrigate".
+description = "The share of this state's harvested corn acres that are irrigated. The upstream model treats every state as rainfed, so a high value here means its reading is less reliable. Absent where USDA withheld the figure for disclosure."
+
+[outputs.schema.properties.regions.items.properties.acres_harvested]
+type = "number"
+unit = "acres"
+description = "Harvested corn-for-grain acres, 2022 Census."
+
+[outputs.schema.properties.regions.items.properties.trend_yield_bu_acre]
+type = "number"
+unit = "bu/acre"
+description = "What this state yields in a normal year at this year's trend."
+
+[outputs.schema.properties.assumptions]
+type = "object"
+required = ["not_a_forecast", "rescaling", "weighting", "coverage", "transmission"]
+description = "Every assumption behind the numbers, as data rather than prose buried in a README."
+
+[outputs.schema.properties.assumptions.properties.not_a_forecast]
+type = "string"
+description = "What this output is and, more importantly, what it is not."
+
+[outputs.schema.properties.assumptions.properties.rescaling]
+type = "string"
+description = "How the upstream rank was put on a real-world scale, and how to audit that step from this document."
+
+[outputs.schema.properties.assumptions.properties.weighting]
+type = "string"
+description = "How the states were combined, and why actual 2022 production was not used as the weight."
+
+[outputs.schema.properties.assumptions.properties.coverage]
+type = "string"
+description = "What share of US corn this covers and what is assumed about the rest."
+
+[outputs.schema.properties.assumptions.properties.trend]
+type = "string"
+description = "Where the yield trend comes from, since the upstream model deliberately carries none."
+
+[outputs.schema.properties.assumptions.properties.irrigation]
+type = "string"
+description = "What the rescaling does and does not fix about the upstream model treating every state as rainfed."
+
+[outputs.schema.properties.assumptions.properties.transmission]
+type = "string"
+description = "The fitted relationship between a yield shock and the corn price."
+
+[outputs.schema.properties.assumptions.properties.transmission_reported_effect]
+type = "string"
+description = "Why the reported figure is a marginal effect rather than a predicted price change."
+
+[outputs.schema.properties.assumptions.properties.transmission_selection]
+type = "string"
+description = "The rule that decided which terms are in the fitted relationship, fixed before the fits were run."
+
+[outputs.schema.properties.assumptions.properties.stocks_to_use_finding]
+type = "string"
+description = "Why the model does not claim that a tight stocks year amplifies the response, despite the well-known relationship."
+
+[outputs.schema.properties.assumptions.properties.interval_definition]
+type = "string"
+description = "What the low and high figures mean, and what they do not mean."
+
+[outputs.schema.properties.assumptions.properties.not_captured]
+type = "array"
+description = "The effects the transmission leaves out, named one by one."
+
+[outputs.schema.properties.assumptions.properties.not_captured.items]
+type = "string"
+description = "One effect the model does not capture."
+
+[[outputs]]
+# The same per-region figures in the long table shape, for a table view or a
+# future step. Its required-key set differs from corn_price_impact's, so a
+# downstream binding is unambiguous.
+name = "corn_price_regions"
+description = "The per-region contributions as a plain table: rank, real-scale anomaly, production weight and contribution, one row per state."
+
+[outputs.schema]
+type = "object"
+required = ["metadata", "columns", "rows"]
+description = "The per-region table."
+
+[outputs.schema.properties.metadata]
+type = "object"
+description = "The same run metadata as corn_price_impact, plus the national result and the assumptions."
+
+[outputs.schema.properties.columns]
+type = "array"
+description = "Column names, in order. Every row has exactly these keys."
+
+[outputs.schema.properties.rows]
+type = "array"
+description = "One object per region."
+
+[outputs.schema.properties.rows.items]
+type = "object"
+required = ["region_key", "state", "yield_percentile_rank", "yield_anomaly_real_pct", "production_weight", "contribution_pct"]
+description = "One region's contribution."
+
+[outputs.schema.properties.rows.items.properties.region_key]
+type = "string"
+description = "The region's stable identifier."
+
+[outputs.schema.properties.rows.items.properties.state]
+type = "string"
+description = "Two-letter state code."
+
+[outputs.schema.properties.rows.items.properties.yield_percentile_rank]
+type = "number"
+unit = "%"
+description = "Where the upstream model put this season among the last thirty."
+
+[outputs.schema.properties.rows.items.properties.yield_anomaly_real_pct]
+type = "number"
+unit = "%"
+description = "What that rank means against thirty years of this state's actual yields."
+
+[outputs.schema.properties.rows.items.properties.production_weight]
+type = "number"
+description = "This state's share of the covered states' normal-year production."
+
+[outputs.schema.properties.rows.items.properties.contribution_pct]
+type = "number"
+unit = "%"
+description = "What this state contributed to the covered yield shock."
