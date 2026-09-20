@@ -66,11 +66,11 @@ USER_AGENT = "modelhome-ag-commodity-bundles/corn-price (build_yield_history.py)
 PERIOD_START = 1995
 PERIOD_END = 2024
 
-# Node 1 owns the region set; see build_weights.py.
-REGIONS = {
-    "ia": "IA", "il": "IL", "mn": "MN", "ne": "NE", "in": "IN",
-    "sd": "SD", "oh": "OH", "wi": "WI", "ks": "KS", "mo": "MO",
-}
+# The region set is NOT redefined here. It is read from production_weights.csv,
+# which build_weights.py writes from node 1's own set, so the two committed
+# tables cannot drift apart: there is one region map in this bundle, not two.
+# Build the weights first.
+WEIGHTS_PATH = HERE / "production_weights.csv"
 
 SHORT_DESC = "CORN, GRAIN - YIELD, MEASURED IN BU / ACRE"
 SUPPRESSED = {"(D)", "(Z)", "(NA)", "(X)", "(S)", ""}
@@ -78,6 +78,21 @@ SUPPRESSED = {"(D)", "(Z)", "(NA)", "(X)", "(S)", ""}
 
 def log(message):
     print(message, file=sys.stderr)
+
+
+def load_regions():
+    """{region_key: STATE} from the already-built production_weights.csv."""
+    if not WEIGHTS_PATH.exists():
+        raise SystemExit(
+            f"{WEIGHTS_PATH.name} is missing. It defines the region set this table is "
+            f"built for, so run build_weights.py first."
+        )
+    with open(WEIGHTS_PATH, newline="") as fh:
+        regions = {r["region_key"]: r["state"] for r in csv.DictReader(fh)}
+    if not regions:
+        raise SystemExit(f"{WEIGHTS_PATH.name} has no rows")
+    log(f"regions: {len(regions)} read from {WEIGHTS_PATH.name}")
+    return regions
 
 
 def current_crops_filename():
@@ -125,9 +140,9 @@ def without_nulls(lines):
         yield line.replace("\0", "") if "\0" in line else line
 
 
-def read_state_yields(archive):
+def read_state_yields(archive, regions):
     """{STATE_ALPHA: {year: bu/acre}} for the final annual estimate."""
-    wanted_states = set(REGIONS.values())
+    wanted_states = set(regions.values())
     by_state = {}
     with gzip.open(archive, mode="rt", encoding="utf-8", errors="replace") as fh:
         for row in csv.DictReader(without_nulls(fh), delimiter="\t"):
@@ -172,16 +187,17 @@ def fit_trend(years, values):
 
 
 def main():
+    regions = load_regions()
     filename = current_crops_filename()
     log(f"current survey export: {filename}")
     archive, last_modified = download(LISTING_URL + filename, CACHE / filename)
 
-    by_state = read_state_yields(archive)
+    by_state = read_state_yields(archive, regions)
     expected = PERIOD_END - PERIOD_START + 1
 
     rows = []
     trends = {}
-    for key, state in REGIONS.items():
+    for key, state in regions.items():
         series = by_state.get(state, {})
         if len(series) != expected:
             missing = sorted(set(range(PERIOD_START, PERIOD_END + 1)) - set(series))
@@ -235,10 +251,13 @@ def main():
         "detrending": "per-state ordinary least squares of yield on calendar year; "
                       "deviation_pct is the residual as a percentage of the fitted line",
         "trends": trends,
+        "regions_source": "production_weights.csv",
         "note": (
             "The period must match node 2's baseline window (1995-2024), because a "
             "percentile rank from node 2 is read as the same quantile of this "
-            "distribution. The runner refuses to run if the two disagree."
+            "distribution. The runner refuses to run if the two disagree. The region "
+            "set is read from production_weights.csv rather than redefined here, so "
+            "the two committed tables cannot drift apart."
         ),
     }, indent=2) + "\n")
     log(f"wrote   {META_PATH.name}")

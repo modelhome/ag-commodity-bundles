@@ -37,6 +37,7 @@ Usage:
 
 Downloads are cached in .nass-cache/ (gitignored); delete it to force a refetch.
 """
+import argparse
 import csv
 import gzip
 import json
@@ -58,6 +59,13 @@ USER_AGENT = "modelhome-ag-commodity-bundles/corn-price (build_weights.py)"
 # agromet-bundles/crop-weather/regions.csv and are never redefined here; the
 # runner joins the input's region_key against this table and fails loudly on a
 # key with no row.
+#
+# This is a transcription, so `--regions <path>` takes node 1's regions.csv
+# directly and the script checks the two agree, naming any difference. Pass it
+# whenever node 1's checkout is to hand -- it turns a duplicated map into a
+# verified one. The transcription stays as the default because these bundles are
+# built and run one repo at a time and a build script must not require a sibling
+# checkout to exist.
 REGIONS = {
     "ia": "IA", "il": "IL", "mn": "MN", "ne": "NE", "in": "IN",
     "sd": "SD", "oh": "OH", "wi": "WI", "ks": "KS", "mo": "MO",
@@ -144,7 +152,37 @@ def read_state_series(archive):
     return by_state, national, withheld
 
 
+def regions_from_upstream(path):
+    """{region_key: STATE} read from node 1's regions.csv, checked against REGIONS."""
+    with open(path, newline="") as fh:
+        upstream = {r["region_key"]: r["state"] for r in csv.DictReader(fh)}
+    if upstream != REGIONS:
+        only_upstream = sorted(set(upstream) - set(REGIONS))
+        only_local = sorted(set(REGIONS) - set(upstream))
+        changed = sorted(k for k in set(upstream) & set(REGIONS)
+                         if upstream[k] != REGIONS[k])
+        raise SystemExit(
+            f"{path} disagrees with this script's region map. "
+            f"only upstream: {only_upstream}; only here: {only_local}; "
+            f"different state: {changed}. Update REGIONS deliberately -- the whole "
+            f"flow shares one region set and node 1 owns it."
+        )
+    log(f"regions: verified against {path}")
+    return upstream
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--regions",
+        help="path to agromet-bundles/crop-weather/regions.csv; when given, the "
+             "region map is checked against node 1's own table and the build fails "
+             "on any difference",
+    )
+    args = parser.parse_args()
+    if args.regions:
+        regions_from_upstream(args.regions)
+
     archive, last_modified = download(NASS_URL, CACHE / "qs.census2022.txt.gz")
     by_state, national, withheld = read_state_series(archive)
 
@@ -204,10 +242,13 @@ def main():
         "coverage_share_of_us": round(covered, 6),
         "regions": sorted(REGIONS),
         "withheld": [f"{s}: {d}" for s, d in withheld if s in REGIONS.values()],
+        "regions_verified_against": args.regions or None,
         "note": (
             "Region keys originate in agromet-bundles/crop-weather/regions.csv and are "
-            "not redefined here. A NASS (D) value means the figure was withheld for "
-            "disclosure and is recorded as missing, never as zero."
+            "not redefined here; pass --regions <that file> to have the build check the "
+            "two agree. A NASS (D) value means the figure was withheld for disclosure "
+            "and is recorded as missing, never as zero. build_yield_history.py reads its "
+            "region set from this table, so the two never drift apart."
         ),
     }, indent=2) + "\n")
     log(f"wrote   {META_PATH.name}")

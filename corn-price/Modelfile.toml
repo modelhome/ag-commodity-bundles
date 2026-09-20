@@ -91,10 +91,18 @@ type = "number"
 unit = "%"
 description = "Where the upstream model puts this season among the last thirty. This is what drives the calculation, because a rank survives the simulation's scale problem where a percentage does not."
 
+# A key INSIDE the upstream document, not a separate input, so it is settable
+# only when you compose the input yourself -- running the bundle standalone, or
+# from a hand-written document. In a flow the upstream model supplies this
+# document verbatim, so a flow always gets the committed default. Making it
+# overridable in a flow needs a second declared [[inputs]], and the platform
+# requires every input of a non-first step to be wired, so that would force
+# every flow author to supply a price. The percentage impact needs no price at
+# all; only the dollar figures do. See "Future work" in the README.
 [inputs.schema.properties.reference_price_usd_bu]
 type = "number"
 unit = "$/bu"
-description = "The corn price the dollar figures are worked out against. Leave it out to use the latest USDA season-average price in the committed table, which is what a flow should do."
+description = "The corn price the dollar figures are worked out against, if you are composing the input document yourself. Leave it out -- as a flow always does -- to use the latest USDA season-average price in the committed table."
 
 [[outputs]]
 # The headline document: the national result, the per-region contributions, and
@@ -215,11 +223,6 @@ type = "number"
 unit = "$/bu"
 description = "The high end in dollars a bushel."
 
-[outputs.schema.properties.national.properties.implied_price_usd_bu]
-type = "number"
-unit = "$/bu"
-description = "The reference price plus the impact, for readability only. It is not a price prediction."
-
 [outputs.schema.properties.regions]
 type = "array"
 description = "One entry per region: its rank, what that maps to on a real-world scale, how much corn it grows and what it contributed to the national figure."
@@ -259,7 +262,9 @@ description = "What that rank means against thirty years of this state's actual 
 
 [outputs.schema.properties.regions.items.properties.dispersion_ratio]
 type = "number"
-description = "How much wider the upstream model's spread of yields is than this state's real one. Above 1 everywhere, and largest in the irrigated states, which is why the rank is used instead of the percentage."
+# The schema format has no nullable type, so this key is OMITTED rather than set
+# to null when the upstream document carries no baseline quantiles for a region.
+description = "How much wider the upstream model's spread of yields is than this state's real one. Above 1 everywhere, and largest in the irrigated states, which is why the rank is used instead of the percentage. Absent when the upstream document does not report a baseline spread for the region."
 
 [outputs.schema.properties.regions.items.properties.production_weight]
 type = "number"
@@ -276,7 +281,10 @@ description = "This state's share of all US corn-for-grain production, from 0 to
 
 [outputs.schema.properties.regions.items.properties.irrigated_share]
 type = "number"
-description = "The share of this state's harvested corn acres that are irrigated. The upstream model treats every state as rainfed, so a high value here means its reading is less reliable. Empty where USDA withheld the figure."
+# Same rule: USDA withholds a figure that would identify an operation, and the
+# key is omitted rather than set to null. It is never read as zero -- that would
+# say "this state does not irrigate".
+description = "The share of this state's harvested corn acres that are irrigated. The upstream model treats every state as rainfed, so a high value here means its reading is less reliable. Absent where USDA withheld the figure for disclosure."
 
 [outputs.schema.properties.regions.items.properties.acres_harvested]
 type = "number"

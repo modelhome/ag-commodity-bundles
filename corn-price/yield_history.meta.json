@@ -8,7 +8,7 @@
   "period": "1995-2024",
   "period_start": 1995,
   "period_end": 2024,
-  "built_at": "2026-09-20T03:16:45+00:00",
+  "built_at": "2026-09-20T05:21:22+00:00",
   "detrending": "per-state ordinary least squares of yield on calendar year; deviation_pct is the residual as a percentage of the fitted line",
   "trends": {
     "ia": {
@@ -72,5 +72,6 @@
       "rmse_bu_acre": 20.6
     }
   },
-  "note": "The period must match node 2's baseline window (1995-2024), because a percentile rank from node 2 is read as the same quantile of this distribution. The runner refuses to run if the two disagree."
+  "regions_source": "production_weights.csv",
+  "note": "The period must match node 2's baseline window (1995-2024), because a percentile rank from node 2 is read as the same quantile of this distribution. The runner refuses to run if the two disagree. The region set is read from production_weights.csv rather than redefined here, so the two committed tables cannot drift apart."
 }

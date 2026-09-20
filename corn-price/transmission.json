@@ -104,9 +104,9 @@
   "price_history_vintage": {
     "source": "https://www.ers.usda.gov/media/5766/feed-grains-yearbook-tables-all-years.csv",
     "source_last_modified": null,
-    "built_at": "2026-09-20T03:19:01+00:00"
+    "built_at": "2026-09-20T05:21:22+00:00"
   },
-  "built_at": "2026-09-20T03:22:07+00:00",
+  "built_at": "2026-09-20T05:21:23+00:00",
   "sample": [
     {
       "year": 1976,

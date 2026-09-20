@@ -98,15 +98,18 @@ def load_weights():
 
 
 def load_yield_history():
-    """({region_key: [deviation_pct, ...] sorted}, meta) from yield_history.csv."""
+    """({region_key: [deviation_pct, ...] sorted}, {region_key: {years}}, meta)."""
     with open(YIELD_HISTORY_PATH, newline="") as fh:
         rows = list(csv.DictReader(fh))
     deviations = {}
+    years = {}
     for row in rows:
-        deviations.setdefault(row["region_key"], []).append(float(row["deviation_pct"]))
+        key = row["region_key"]
+        deviations.setdefault(key, []).append(float(row["deviation_pct"]))
+        years.setdefault(key, set()).add(int(row["year"]))
     for key in deviations:
         deviations[key].sort()
-    return deviations, json.loads(YIELD_HISTORY_META_PATH.read_text())
+    return deviations, years, json.loads(YIELD_HISTORY_META_PATH.read_text())
 
 
 # --------------------------------------------------------------- the modelling
@@ -200,9 +203,13 @@ def check_periods(node2_metadata, yield_meta):
     upstream_period = baselines.get("period")
     local_period = yield_meta.get("period")
     if not upstream_period:
-        log(f"warning: upstream metadata declares no baseline period; "
-            f"assuming it matches {local_period}")
-        return local_period, None
+        raise RunError(
+            f"the upstream document declares no metadata.baselines.period, so there is no "
+            f"way to tell whether its percentile ranks were computed over the same window "
+            f"as yield_history.csv ({local_period}). A rank read against the wrong window "
+            f"is a silently wrong answer, so this is a failed run rather than an "
+            f"assumption. Run against an upstream model that publishes its baseline period."
+        )
     if upstream_period != local_period:
         raise RunError(
             f"period mismatch: the upstream model's baseline covers {upstream_period} "
@@ -215,14 +222,15 @@ def check_periods(node2_metadata, yield_meta):
 
 # ------------------------------------------------------------------- the model
 
-def process(snapshot, weights, deviations, yield_meta, price_meta, weights_meta,
-            transmission, reference_price_override):
+def process(snapshot, weights, deviations, observed_years, yield_meta, price_meta,
+            weights_meta, transmission, reference_price_override):
     metadata = snapshot.get("metadata") or {}
     rows = snapshot.get("rows")
     if not isinstance(rows, list) or not rows:
         raise RunError("the input document has no rows; expected one per region")
 
     period, _ = check_periods(metadata, yield_meta)
+    expected_years = set(range(yield_meta["period_start"], yield_meta["period_end"] + 1))
 
     date = metadata.get("date") or (rows[0].get("date") if rows else None)
     if not date:
@@ -248,8 +256,21 @@ def process(snapshot, weights, deviations, yield_meta, price_meta, weights_meta,
                 f"Known keys: {', '.join(sorted(deviations))}."
             )
         observed = deviations[key]
-        if len(observed) < 10:
-            raise RunError(f"{key}: only {len(observed)} observed years; need a full window")
+        # The upstream rank refers to a thirty-year distribution, so the observed
+        # distribution it is read against must be that same window exactly. A
+        # truncated table would shift every empirical quantile while the rank
+        # still meant thirty years -- a wrong mapping, not a rough one.
+        missing = expected_years - observed_years.get(key, set())
+        extra = observed_years.get(key, set()) - expected_years
+        if missing or extra:
+            raise RunError(
+                f"{key}: yield_history.csv does not cover {period} exactly "
+                f"({len(observed_years.get(key, set()))} years"
+                + (f", missing {sorted(missing)}" if missing else "")
+                + (f", unexpected {sorted(extra)}" if extra else "")
+                + "). The upstream percentile rank refers to that whole window, so a "
+                  "partial table would shift every quantile it is read against."
+            )
 
         simulated_pct = row.get("yield_anomaly_pct")
         rank = row.get("yield_percentile_rank")
@@ -278,6 +299,15 @@ def process(snapshot, weights, deviations, yield_meta, price_meta, weights_meta,
             "production_share_of_us": info["production_share_of_us"],
             "_weight_raw": weight_raw,
         })
+        # The Modelfile schema format has no nullable type, so an optional field
+        # that has no value is OMITTED rather than emitted as null. Two can be
+        # absent legitimately: irrigated_share when NASS withheld the figure for
+        # disclosure, and dispersion_ratio when the upstream document carries no
+        # baseline quantiles for the region.
+        for optional in ("irrigated_share", "dispersion_ratio",
+                         "yield_anomaly_simulated_pct"):
+            if regions[-1].get(optional) is None:
+                del regions[-1][optional]
 
     total_weight = sum(r["_weight_raw"] for r in regions)
     if total_weight <= 0:
@@ -351,7 +381,9 @@ def process(snapshot, weights, deviations, yield_meta, price_meta, weights_meta,
         "price_impact_usd_bu": round(reference_price * central / 100.0, 4),
         "price_impact_usd_bu_low": round(reference_price * impacts[0] / 100.0, 4),
         "price_impact_usd_bu_high": round(reference_price * impacts[1] / 100.0, 4),
-        "implied_price_usd_bu": round(reference_price * (1 + central / 100.0), 4),
+        # There is deliberately no implied_price_usd_bu. A price LEVEL is the one
+        # figure here a reader would take for a forecast, and it adds nothing that
+        # reference_price_usd_bu plus price_impact_usd_bu does not already give.
     }
 
     assumptions = {
@@ -494,15 +526,24 @@ def read_json(path):
         raise RunError(f"input file is not valid JSON: {path}: {exc}")
 
 
-def optional_number(document, key):
-    """A present-but-empty value falls back exactly as a missing key does."""
+def optional_number(document, key, positive=False):
+    """A present-but-empty value falls back exactly as a missing key does.
+
+    `float()` happily parses "nan", "inf" and negatives, none of which is a price.
+    A NaN would also travel out as a bare `NaN` token, which is not valid JSON.
+    """
     value = document.get(key)
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         raise RunError(f"{key} must be a number, got {value!r}")
+    if not math.isfinite(number):
+        raise RunError(f"{key} must be a finite number, got {value!r}")
+    if positive and number <= 0:
+        raise RunError(f"{key} must be greater than zero, got {number}")
+    return number
 
 
 def main(argv):
@@ -514,16 +555,16 @@ def main(argv):
     regions_path = argv[2] if len(argv) > 2 else None
 
     weights = load_weights()
-    deviations, yield_meta = load_yield_history()
+    deviations, observed_years, yield_meta = load_yield_history()
     price_meta = json.loads(PRICE_HISTORY_META_PATH.read_text())
     weights_meta = json.loads(WEIGHTS_META_PATH.read_text())
     transmission = json.loads(TRANSMISSION_PATH.read_text())
 
-    reference_price = optional_number(snapshot, "reference_price_usd_bu")
+    reference_price = optional_number(snapshot, "reference_price_usd_bu", positive=True)
 
     national, regions, assumptions, meta = process(
-        snapshot, weights, deviations, yield_meta, price_meta, weights_meta,
-        transmission, reference_price,
+        snapshot, weights, deviations, observed_years, yield_meta, price_meta,
+        weights_meta, transmission, reference_price,
     )
 
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -358,9 +358,9 @@ committed two-region output and record AC-11 as partial evidence, exactly as nod
 | AC-4 | Docker build and run reproduce it | `Dockerfile`, python:3.12-slim, no pip layer | `docker run --network none`: whole document **identical** to local apart from `generated_at` | **pass** |
 | AC-5 | Weights keyed on node 1's key; coverage share from the source | `build_weights.py`, `production_weights.csv` | `check_price.py`: ten keys, shares equal production/US total, coverage **82.47%** in a sane band, ne/ks most irrigated | **pass** |
 | AC-6 | Regional anomalies combine by a documented weighting | `process()` weighting (D5, D6) | `check_price.py`: weights sum to 1, contributions sum to the covered shock, US = covered x coverage, hand-worked three-region case | **pass** |
-| AC-7 | Simulated anomaly placed on a real scale | `quantile_map` (D4, revised by C1) | `check_price.py`: monotone, bounded, rank 50 -> exactly 0, dispersion ratio **> 2 in every region** (3.07x-11.66x), unmapped +3.70% vs +0.23% used | **pass** |
+| AC-7 | Simulated anomaly placed on a real scale | `quantile_map` (D4, revised by C1) | `check_price.py`: monotone, bounded, rank 50 -> exactly 0, dispersion ratio **> 2 in every region** (3.07x-11.66x), unmapped +3.70% vs +0.23% used; window checked year by year | **pass** |
 | AC-8 | Rainfed bias handled and visible | D4 plus `irrigated_share` and `dispersion_ratio` per region | `check_price.py`: the two most over-dispersed regions are the two most irrigated (ne 11.7x/52.7%, ks 9.9x/25.4%) | **pass** |
-| AC-9 | Cited transmission; every number with an interval | `transmission.json`, `price_impact` (D3, revised by C2) | `check_price.py`: b0 < 0, bootstrap CI excludes 0, every headline has `_low`/`_high` bracketing it, bad season -> +7.91%, **2012 recovers -22.04% vs actual -22.23%** | **pass** |
+| AC-9 | Cited transmission; every number with an interval | `transmission.json`, `price_impact` (D3, revised by C2) | `check_price.py`: b0 < 0, bootstrap CI excludes 0, every headline has `_low`/`_high` bracketing it, bad season -> +7.91%, **2012 (properly dated) recovers -21.92% vs actual -22.23%** | **pass** |
 | AC-10 | Unknown key fails loudly | table loaders, `process()`, `check_periods` | `check_price.py`: unknown `zz` exits 1 naming key and table, no traceback; window mismatch exits 1 naming both windows | **pass** |
 | AC-11 | Full region set, no parameters | `required = []` on the one optional input | the ten-region sample runs on the document alone; a two-region subset also runs and reports 28.8% coverage | **pass** |
 | AC-12 | Annotations honest and within limits | `Modelfile.toml`, output `assumptions` | `validate` -> **OK**; validity_domain 587/600, provenance 393/400; not_for and the output both say not a forecast / not advice / not a signal; every required key typed; no required field null | **pass** |
@@ -657,3 +657,68 @@ The plan's step 1 generated a real ten-region node 1 -> node 2 run to serve as
 ("AC-9 was verified on two regions, not ten... a full ten-region node 1 output
 should be run once before the model goes on a schedule"). Node 2 ran all ten
 regions cleanly, offline, in about a second per region.
+
+### C10. Copilot review findings, all addressed
+
+Ten findings on PR #1. All ten were legitimate; two were answered by correcting
+documentation rather than restructuring, and the reasoning for that is recorded
+below. Checks went 63 -> **73**. No committed table or coefficient changed.
+
+**The sharpest finding, and the one that mattered most.** The 2012 end-to-end
+validation changed only the percentile ranks and left the sample's 2026 dates in
+place. Production weights are harvested acres times the *trend* yield for the
+snapshot's year, so the check was weighting a 2012 episode with 2026 trend
+yields — it could have passed without reproducing the episode it claimed to
+test. Dated properly, it gives **-21.92%** against the actual **-22.23%**
+(0.31 points, was 0.19). The conclusion holds and the check now earns it.
+
+The other structural fixes:
+
+- **An absent upstream `baselines.period` now fails the run.** It previously
+  logged a warning and proceeded against the local window. Since the whole
+  mapping is only valid when the two windows are known to match, an unknown
+  window is exactly the case that must not proceed.
+- **The observed window is checked year by year, not by row count.** `< 10` had
+  admitted any truncated 10-to-29-year history, which would shift every
+  empirical quantile while the upstream rank still referred to thirty years.
+- **`reference_price_usd_bu` must be finite and positive.** `float()` accepts
+  `nan`, `inf` and negatives; a NaN would also have travelled out as a bare
+  `NaN` token, which is not valid JSON.
+- **Optional fields are omitted, never emitted as null.** `irrigated_share` (a
+  NASS disclosure withholding) and `dispersion_ratio` (no upstream baseline
+  spread) are declared `type = "number"`, and the schema format has no nullable
+  type, so a null would have violated the model's own declaration. Today no
+  region triggers either, so nothing in the committed output changed.
+- **`implied_price_usd_bu` is gone.** It shipped a price *level* with no
+  interval, contrary to AC-9 — and a bare $/bu figure is the single number a
+  reader would take for a forecast. Removing it fixes the AC-9 gap and lowers
+  that risk; `reference_price_usd_bu` plus `price_impact_usd_bu` still give it
+  to anyone who wants it. Preferred over adding `_low`/`_high` companions.
+- **The marketing-year cutoff respects the month.** `current year - 1` marks the
+  in-progress year final whenever the script is rebuilt between January and
+  August, which would put a WASDE projection into the trend and the transmission
+  fit. Correct today (September), wrong on the next off-season rebuild.
+- **One region map in the bundle, not two.** `build_yield_history.py` now reads
+  its region set from `production_weights.csv` instead of keeping a second
+  hard-coded copy, so the two committed tables cannot drift apart.
+  `build_weights.py` gains `--regions <path>`, which checks its map against node
+  1's own `regions.csv` and fails naming any difference.
+
+**Two answered by documentation, deliberately:**
+
+- **`reference_price_usd_bu` cannot be overridden in a flow, and the README said
+  it could.** The finding is right and the documentation was wrong. The fix is
+  the documentation, not the design: promoting it to its own `[[inputs]]` would
+  make the override work, but `flow_service` requires every input of a non-first
+  step to be wired, so every flow author would then have to supply a price for a
+  figure that is cosmetic to the percentage impact. Zero-configuration in a flow
+  is worth more. The README, the Modelfile comment and the future-work section
+  now all say plainly that a flow always gets the committed default and what
+  changing that would cost.
+- **The region map was duplicated across two build scripts.** Real, and halved
+  as described above. Not taken further: reading node 1's `regions.csv` at build
+  time would make a sibling checkout a hard requirement of this repo's build,
+  and the runtime protection already exists — an unknown `region_key` is a loud
+  failure, so a table built for the wrong set surfaces immediately rather than
+  producing a silently wrong answer. `--regions` makes the verification
+  available to anyone who has node 1 to hand.

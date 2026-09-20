@@ -57,10 +57,17 @@ The whole input is node 2's `corn_yield_snapshot`. Node 3 reads, per region:
 and from `metadata`: the reporting date, `baselines.period`, and each region's
 baseline spread (`median_kg_ha`, `p10_kg_ha`, `p90_kg_ha`).
 
-One optional input, `reference_price_usd_bu`, sets the price the dollar figures
-are worked out against. Leave it out and the committed table's latest USDA
-season-average price is used. A present-but-empty value falls back the same way
-a missing key does.
+`reference_price_usd_bu` sets the price the dollar figures are worked out
+against. It is a **key inside the input document**, not a separate declared
+input, so it is settable only when you compose that document yourself — running
+the bundle standalone, or from a hand-written file. **In a flow the upstream
+model supplies the document verbatim, so a flow always gets the committed
+default.** Making it overridable in a flow needs a second declared `[[inputs]]`,
+and the platform requires every input of a non-first step to be wired, which
+would force every flow author to supply a price for a figure that is cosmetic to
+the percentage impact. See *Future work*. A present-but-empty value falls back
+the same way a missing key does; a non-finite or non-positive value fails the
+run.
 
 The region set comes from the input. This model joins on node 1's `region_key`
 and never defines its own; a key with no table row exits 1 naming the key and
@@ -228,7 +235,10 @@ to the very shock being conditioned.
 
 `price_impact_pct` and `price_impact_usd_bu` each ship with a `_low` and a
 `_high`, and the schema requires all three together so a number cannot ship
-without its range even by accident.
+without its range even by accident. There is deliberately **no implied price
+level** in the output: a bare `$/bu` figure is the one number a reader would
+take for a forecast, and `reference_price_usd_bu` plus `price_impact_usd_bu`
+already give it to anyone who wants it.
 
 The range is a **nonparametric bootstrap 95% interval on `b0`** — 10,000 pairs
 resamples, fixed seed — so it expresses how well the transmission itself is
@@ -306,21 +316,27 @@ Covered shock **+0.28%**, US shock **+0.23%** over 82.5% of production
 on a $4.80 reference. A genuinely unremarkable season implies almost nothing,
 which is the behaviour to expect.
 
-`check_price.py`: **63/63 checks pass**. Notably:
+`check_price.py`: **73/73 checks pass**. Notably:
 
 - **The 2012 drought, end to end.** Feeding each state's *actual* 2012 rank
   reproduces a US yield shock of **−22.04%** against the actual national
   deviation of **−22.23%** — 0.19 points. That tests the mapping, the weighting
   and the coverage assumption against a real outcome rather than against
   themselves. The actual 2012 price move (+10.8%) falls inside the implied range
-  (+9.1% to +32.3%), which is a weak test on one observation and is labelled as
+  (+9.0% to +32.1%), which is a weak test on one observation and is labelled as
   one.
 - A tenth-percentile season everywhere gives a −9.72% US shock and a **+7.91%**
   [+3.90, +13.13] price impact: right sign, plausible size.
 - Node 2 is over-dispersed in every region (3.1× to 11.7×), and the two most
   over-dispersed regions are the two most irrigated.
 - An unknown `region_key` exits 1 naming the key and the table, with no
-  traceback; a baseline-window mismatch exits 1 naming both windows.
+  traceback; a baseline-window mismatch exits 1 naming both windows; an *absent*
+  upstream baseline window also exits 1 rather than assuming compatibility; and
+  a non-finite or non-positive reference price is rejected.
+- No region field is emitted as `null` under a declared `number` type. The
+  schema format has no nullable type, so an optional field with no value —
+  `irrigated_share` where USDA withheld it, `dispersion_ratio` where the
+  upstream document carries no baseline spread — is **omitted**, never nulled.
 
 `docker run --network none` reproduces the local run **byte-identically** apart
 from `generated_at`.
@@ -360,10 +376,15 @@ uv run --python 3.12 --no-project python corn-price/check_price.py run/corn_pric
 **Live and market prices** (the dollar figures only; the percentage impact needs
 no price at all). Three routes, in increasing cost:
 
-1. **Available today with no code change.** The flow editor can bind
-   `reference_price_usd_bu` to an `inline` literal or an `http(s)` `url`, because
-   `flow_service` resolves each input independently. A current price can be fed
-   in without this model fetching anything.
+1. **A second declared input.** `reference_price_usd_bu` is currently a key
+   inside the upstream document, so a flow cannot override it — the upstream
+   model supplies that document whole. Promoting it to its own `[[inputs]]`
+   would let the flow editor bind it to an `inline` literal or an `http(s)`
+   `url`, since `flow_service` resolves each input independently against any
+   earlier step. The cost is that the platform requires every input of a
+   non-first step to be wired, so every flow author would then have to supply a
+   price. Worth doing only once the dollar figure matters more than the
+   zero-configuration default.
 2. **Compose with a rebuilt `yfinance-bundles/historical-ohlcv`** as an earlier
    flow step. Structurally this already works — a step's inputs may come from
    *any* earlier step — but that bundle is old-generation and would need

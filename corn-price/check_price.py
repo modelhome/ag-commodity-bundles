@@ -121,6 +121,16 @@ def check_tables(weights, deviations, metas):
     yield_meta = metas["yield_history"]
     check("observed window is node 2's 1995-2024",
           yield_meta["period"] == "1995-2024", yield_meta["period"])
+    # Row count is not enough: the upstream rank refers to a specific window, so
+    # the years themselves must be exactly that window for every region.
+    expected_years = set(range(yield_meta["period_start"], yield_meta["period_end"] + 1))
+    with open(HERE / "yield_history.csv", newline="") as fh:
+        years = {}
+        for row in csv.DictReader(fh):
+            years.setdefault(row["region_key"], set()).add(int(row["year"]))
+    off = {k: sorted(expected_years ^ v) for k, v in years.items() if v != expected_years}
+    check("every region covers exactly the declared window, year by year",
+          not off, f"off: {off}" if off else f"{len(expected_years)} years x {len(years)} regions")
 
 
 # ------------------------------------------------------- the rescaling (AC-7/8)
@@ -300,12 +310,18 @@ def check_transmission(document, transmission, deviations):
         history = list(csv.DictReader(fh))
     dev_2012 = {r["region_key"]: float(r["deviation_pct"])
                 for r in history if r["year"] == "2012"}
+    # The dates matter as much as the ranks: production weights are acres times
+    # the TREND yield for the snapshot's year, so leaving the sample's 2026 dates
+    # in place would weight a 2012 episode with 2026 trend yields and the check
+    # would not be testing the historical episode it claims to.
     snapshot = json.loads(SAMPLE.read_text())
+    snapshot["metadata"]["date"] = "2012-09-20"
     for row in snapshot["rows"]:
         key = row["region_key"]
         series = deviations[key]
         rank = 100.0 * sum(1 for v in series if v < dev_2012[key]) / len(series)
         row["yield_percentile_rank"] = rank
+        row["date"] = "2012-09-20"
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "y2012.json"
         path.write_text(json.dumps(snapshot))
@@ -317,6 +333,9 @@ def check_transmission(document, transmission, deviations):
     actual_national_dev = float(price_rows[2012]["yield_deviation_pct"])
     if y2012:
         modelled = y2012["national"]["us_yield_shock_pct"]
+        check("the 2012 case is dated 2012, not the sample's year",
+              y2012["national"]["date"].startswith("2012"),
+              y2012["national"]["date"])
         check("2012 ranks reproduce the actual national yield deviation within 3 points",
               close(modelled, actual_national_dev, 3.0),
               f"modelled {modelled:+.2f}% vs actual {actual_national_dev:+.2f}%")
@@ -372,6 +391,48 @@ def check_loud_failures():
 
 
 # ------------------------------------------------- honesty and schema (AC-12)
+
+def check_contract(document):
+    """Output-contract invariants the schema declares but cannot enforce alone."""
+    print("\nreview  the declared contract holds at runtime")
+    national = document["national"]
+    check("no bare price LEVEL is published, only impacts",
+          "implied_price_usd_bu" not in national,
+          "a price level is the one figure a reader would take for a forecast")
+
+    # The schema format has no nullable type, so an optional field with no value
+    # must be omitted, never emitted as null under a declared `number`.
+    nulled = [
+        (r["region_key"], k) for r in document["regions"]
+        for k, v in r.items() if v is None
+    ]
+    check("no region field is emitted as null under a declared type",
+          not nulled, f"null: {nulled}" if nulled else "")
+
+    snapshot = json.loads(SAMPLE.read_text())
+
+    # A missing upstream baseline window must fail, not be assumed compatible.
+    stripped = json.loads(json.dumps(snapshot))
+    stripped["metadata"]["baselines"].pop("period")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "noperiod.json"
+        path.write_text(json.dumps(stripped))
+        code, _, stderr = run_model(path)
+    check("an absent upstream baseline period exits non-zero", code == 1, f"exit {code}")
+    check("the message explains why assuming a window is unsafe",
+          "baselines.period" in stderr and "1995-2024" in stderr)
+
+    # A reference price must be finite and positive.
+    for bad in ("nan", "inf", "-1", "0"):
+        case = json.loads(json.dumps(snapshot))
+        case["reference_price_usd_bu"] = bad
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "price.json"
+            path.write_text(json.dumps(case))
+            code, _, stderr = run_model(path)
+        check(f"reference_price_usd_bu={bad!r} is rejected", code == 1,
+              stderr.strip().splitlines()[-1][:80] if stderr.strip() else f"exit {code}")
+
 
 def check_annotations(document):
     print("\nAC-12  annotations are honest and inside the platform's limits")
@@ -452,6 +513,7 @@ def main(argv):
     check_aggregation(document)
     check_transmission(document, transmission, deviations)
     check_loud_failures()
+    check_contract(document)
     check_annotations(document)
 
     total = len(PASSES) + len(FAILURES)

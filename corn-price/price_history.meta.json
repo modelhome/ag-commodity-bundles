@@ -9,7 +9,7 @@
   "marketing_year": "Sep-Aug",
   "period": "1975-2026",
   "latest_complete_marketing_year": 2025,
-  "built_at": "2026-09-20T03:19:01+00:00",
+  "built_at": "2026-09-20T05:21:22+00:00",
   "national_yield_trend": {
     "intercept_bu_acre": -3631.25867,
     "slope_bu_acre_per_year": 1.883475,

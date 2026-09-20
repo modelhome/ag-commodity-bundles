@@ -148,8 +148,12 @@ def main():
 
     # The balance sheet is the binding constraint on the window.
     years = sorted(set(ending) & set(total_use) & set(yield_) & set(price))
-    # Marketing year Y runs Sep Y to Aug Y+1, so Y is complete once Y+1 is past.
-    latest_complete = datetime.now(timezone.utc).year - 1
+    # Marketing year Y runs Sep Y to Aug Y+1, so Y is complete only once August
+    # of Y+1 is past. Taking "this year minus one" would mark the in-progress year
+    # final whenever the script is rebuilt between January and August, putting a
+    # WASDE projection into the trend and the transmission fit.
+    now = datetime.now(timezone.utc)
+    latest_complete = now.year - 1 if now.month >= 9 else now.year - 2
     log(f"balance sheet {years[0]}-{years[-1]}; latest complete marketing year {latest_complete}")
 
     # Detrend the national yield over the complete years only, so a projected

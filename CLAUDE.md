@@ -323,10 +323,11 @@ corn-price/
 
 ### Verified results (2026-09-20)
 
-- `check_price.py`: **63/63 checks pass**.
+- `check_price.py`: **73/73 checks pass** (63 before the Copilot review).
 - **The 2012 drought, end to end:** feeding each state's actual 2012 rank
-  reproduces a US yield shock of **-22.04%** against the actual national
-  deviation of **-22.23%**. That validates the mapping, the weighting and the
+  reproduces a US yield shock of **-21.92%** against the actual national
+  deviation of **-22.23%**. The case is dated 2012 as well as ranked 2012, so
+  the weights use 2012 trend yields -- getting that wrong was a review finding. That validates the mapping, the weighting and the
   coverage assumption against a real outcome rather than against themselves.
 - A tenth-percentile season everywhere: -9.72% US shock, **+7.91%** [+3.90,
   +13.13] price impact. Right sign, plausible size.
@@ -341,6 +342,11 @@ corn-price/
 - **Modelfile validates** (`OK`, no annotation warnings), and
   `check_schema_compatibility` confirms the input binds node 2's
   `corn_yield_snapshot` and is refused by `corn_yield_trajectory`.
+- **Copilot review (PR #1):** ten findings, all legitimate, all addressed. The
+  sharpest was that the 2012 validation changed only the ranks and left the
+  sample's 2026 dates, so it weighted a 2012 episode with 2026 trend yields and
+  was not testing the episode it claimed to. Checks went 63 -> **73**. No
+  committed table or coefficient changed.
 - **Not yet verified:** the Model Home import, which needs a signed-in human at
   the Auth0 login.
 
