@@ -163,6 +163,19 @@ def main():
     # of Y+1 is past. Taking "this year minus one" would mark the in-progress year
     # final whenever the script is rebuilt between January and August, putting a
     # WASDE projection into the trend and the transmission fit.
+    # Exports must cover the whole window. Unlike area or production, which are
+    # written as blanks when a year is absent, a missing export value would make
+    # a table that builds cleanly and only fails validation afterwards -- so it
+    # fails here, naming the years, the way read_series fails on a missing
+    # attribute. Never widen the window intersection above with exports: that
+    # would silently drop balance-sheet years instead.
+    missing_exports = [y for y in years if y not in exports]
+    if missing_exports:
+        raise SystemExit(
+            f"no export value for {missing_exports} in {TABLE_4!r}; exports must "
+            "cover every marketing year in the balance-sheet window"
+        )
+
     now = datetime.now(timezone.utc)
     latest_complete = now.year - 1 if now.month >= 9 else now.year - 2
     log(f"balance sheet {years[0]}-{years[-1]}; latest complete marketing year {latest_complete}")
@@ -192,11 +205,9 @@ def main():
             "beginning_stocks_mil_bu": f"{beginning[year]:.3f}" if year in beginning else "",
             "ending_stocks_mil_bu": f"{ending[year]:.3f}",
             "total_use_mil_bu": f"{total_use[year]:.3f}",
-            "exports_mil_bu": f"{exports[year]:.3f}" if year in exports else "",
+            "exports_mil_bu": f"{exports[year]:.3f}",
             # Fraction of a denominator that already contains the numerator.
-            "export_share_of_use": (
-                f"{exports[year] / total_use[year]:.6f}" if year in exports else ""
-            ),
+            "export_share_of_use": f"{exports[year] / total_use[year]:.6f}",
             "stocks_to_use": f"{stocks_to_use:.6f}",
             "carryin_stocks_to_use": "" if carryin is None else f"{carryin:.6f}",
             "price_usd_bu": f"{price[year]:.4f}",
