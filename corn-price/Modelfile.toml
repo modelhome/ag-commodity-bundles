@@ -274,7 +274,7 @@ description = "What that rank means against thirty years of this state's actual 
 type = "number"
 # The schema format has no nullable type, so this key is OMITTED rather than set
 # to null when the upstream document carries no baseline quantiles for a region.
-description = "How much wider the upstream model's spread of yields is than this state's real one. Above 1 everywhere, and largest in the irrigated states, which is why the rank is used instead of the percentage. Absent when the upstream document does not report a baseline spread for the region."
+description = "How much wider the upstream model's spread of yields is than this region's real one. Above 1 everywhere, which is why the rank is used instead of the percentage. It is *lowest* for the irrigated parts of a split state, because irrigation damps the simulated and the real crop alike -- so this is not a way to tell which regions are irrigated; read the stratum field for that. Absent when the upstream document does not report a baseline spread for the region."
 
 [outputs.schema.properties.regions.items.properties.production_weight]
 type = "number"
@@ -294,12 +294,19 @@ type = "number"
 # Same rule: USDA withholds a figure that would identify an operation, and the
 # key is omitted rather than set to null. It is never read as zero -- that would
 # say "this state does not irrigate".
-description = "The share of this state's harvested corn acres that are irrigated. The upstream model treats every state as rainfed, so a high value here means its reading is less reliable. Absent where USDA withheld the figure for disclosure."
+description = "The share of THIS REGION's harvested corn acres that are irrigated. For one part of a split state that is 1 or 0 by construction, because the part is defined by its irrigation; for a state that is not split it is the measured state figure. Use state_irrigated_share to compare states. Absent where USDA withheld the figure for disclosure."
+
+[outputs.schema.properties.regions.items.properties.state_irrigated_share]
+type = "number"
+# Carried on every row, including the parts of a split state, so the figure
+# stays comparable across split and unsplit regions. This is the one node 1's
+# 20% split threshold is applied to.
+description = "The share of the WHOLE STATE's harvested corn acres that are irrigated, the same value on both parts of a split state. This is what decides whether a state is split at all. Absent where USDA withheld the figure for disclosure."
 
 [outputs.schema.properties.regions.items.properties.acres_harvested]
 type = "number"
 unit = "acres"
-description = "Harvested corn-for-grain acres, 2022 Census."
+description = "Harvested corn-for-grain acres, 2022 Census. For one part of a split state, that part's acres."
 
 [outputs.schema.properties.regions.items.properties.trend_yield_bu_acre]
 type = "number"

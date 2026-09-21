@@ -179,7 +179,20 @@ crop out-yield those irrigating none by 105% in Kansas and 55% in Nebraska, but
 yield 8% *less* in Iowa and 20% less in Ohio, where irrigation sits on marginal
 ground. Nothing here assumes irrigated means better, and no code infers a
 stratum from the spelling of a region key — `production_weights.csv` declares
-it, exactly as node 2's `water_regime.csv` declares its water regime.
+it, exactly as node 2's `water_regime.csv` declares its water regime. The runner
+also **checks that declaration against node 2's own** `metadata.baselines.
+regions[key].regime` on every run and refuses to start on a mismatch: a snapshot
+whose `ne_irrigated` was in fact simulated rainfed would have its rank read
+against a distribution of about twice the right width, which is a silently wrong
+answer rather than a rough one. A region that declares no regime at all is
+treated as a mismatch, not assumed rainfed.
+
+Two irrigation figures ship per region and they mean different things.
+`irrigated_share` describes **the region** — 1 or 0 for one part of a split
+state, since the part is defined by its irrigation — while
+`state_irrigated_share` carries **the whole state's** figure on every row, is
+identical on both parts of a split state, and is the number node 1's 20%
+threshold is applied to. Use the second to compare states.
 
 **Irrigation supply is unconstrained upstream.** Node 2 irrigates whenever soil
 moisture falls to its trigger, with no aquifer decline, allocation limit or
@@ -428,7 +441,7 @@ Note `ne_irrigated` at rank 50.0 against `ne_rainfed` at 70.0 on the same
 weather: the two strata carry different signal, which is the point of splitting
 them.
 
-`check_price.py`: **133/133 checks pass** (95 before brief 0003). Notably:
+`check_price.py`: **148/148 checks pass** (95 before brief 0003, 133 before the Copilot review). Notably:
 
 - **The 2012 drought, end to end.** Feeding each region's *actual* 2012 rank
   reproduces a US yield shock of **-22.64%** against the actual national
@@ -458,7 +471,8 @@ them.
   a non-finite or non-positive reference price is rejected.
 - No region field is emitted as `null` under a declared `number` type. The
   schema format has no nullable type, so an optional field with no value -
-  `irrigated_share` where USDA withheld it, `dispersion_ratio` where the
+  `irrigated_share` and `state_irrigated_share` where USDA withheld it,
+  `dispersion_ratio` where the
   upstream document carries no baseline spread, `stratum_dispersion_ratio` on an
   unsplit region - is **omitted**, never nulled.
 

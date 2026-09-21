@@ -142,8 +142,21 @@ def check_tables(weights, deviations, metas):
     check("each stratum's irrigated share is 1 or 0 by construction",
           all(irrigated[k] == 1.0 for k, s in strata.items() if s == "irrigated")
           and all(irrigated[k] == 0.0 for k, s in strata.items() if s == "rainfed"))
+    state_share = {k: float(r["state_irrigated_share"]) for k, r in weights.items()
+                   if r.get("state_irrigated_share")}
+    check("every row carries the whole state's irrigated share",
+          sorted(state_share) == sorted(weights))
+    check("an unsplit region's own share is its state's",
+          all(close(state_share[k], irrigated[k], 1e-9)
+              for k, s in strata.items() if s == "all"))
+    for state, (irr, rain) in SPLIT_STATES.items():
+        check(f"{state}'s two strata report the same state irrigated share",
+              close(state_share[irr], state_share[rain], 1e-9),
+              f"{state_share[irr]:.4f}")
+        check(f"{state} is at or above node 1's 20% split threshold",
+              state_share[irr] >= 0.20, f"{state_share[irr]:.1%}")
     check("every unsplit state is below node 1's 20% split threshold",
-          all(irrigated[k] < 0.20 for k, s in strata.items() if s == "all"),
+          all(state_share[k] < 0.20 for k, s in strata.items() if s == "all"),
           ", ".join(f"{k} {irrigated[k]:.1%}"
                     for k in sorted(strata, key=irrigated.get, reverse=True)
                     if strata[k] == "all")[:80])
@@ -249,6 +262,12 @@ def check_stratum_rescaling(document, weights, deviations, metas):
           and "upper bound" in (assumptions.get("irrigation") or "").lower())
 
     regions = document["regions"]
+    tables = (document.get("metadata") or {}).get("tables") or {}
+    pw = tables.get("production_weights") or {}
+    check("the full-set coverage key is region-neutral, not named for ten states",
+          "coverage_share_of_us_all_regions" in pw
+          and "coverage_share_of_us_all_ten" not in pw)
+
     check("every region row declares its stratum",
           all(r.get("stratum") in ("all", "irrigated", "rainfed") for r in regions))
     rescaled_rows = [r for r in regions if r.get("stratum") != "all"]
@@ -614,6 +633,36 @@ def check_loud_failures():
     check("the message names both windows",
           "1991-2020" in stderr and "1995-2024" in stderr)
     check("no traceback on the window mismatch", "Traceback" not in stderr)
+
+    # A snapshot whose water regime disagrees with this model's stratum would
+    # map a rank onto a distribution of roughly half or twice the right width.
+    # Doctored both ways: an irrigated stratum simulated rainfed, and an
+    # unsplit state simulated irrigated.
+    for label, key, regime in (("an irrigated stratum simulated rainfed",
+                                "ne_irrigated", "rainfed"),
+                               ("an unsplit state simulated irrigated", "ia",
+                                "irrigated")):
+        snapshot = json.loads(SAMPLE.read_text())
+        snapshot["metadata"]["baselines"]["regions"][key]["regime"] = regime
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "regime.json"
+            path.write_text(json.dumps(snapshot))
+            code, _, stderr = run_model(path)
+        check(f"{label} exits non-zero", code == 1, f"exit {code}")
+        check(f"the message names {key} and both regimes",
+              key in stderr and regime in stderr)
+        check(f"no traceback on the {key} regime mismatch", "Traceback" not in stderr)
+
+    # An absent regime is a mismatch, not an assumption of rainfed.
+    snapshot = json.loads(SAMPLE.read_text())
+    del snapshot["metadata"]["baselines"]["regions"]["ks_irrigated"]["regime"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "noregime.json"
+        path.write_text(json.dumps(snapshot))
+        code, _, stderr = run_model(path)
+    check("a missing upstream regime exits non-zero rather than being assumed",
+          code == 1, f"exit {code}")
+    check("the message says the regime was absent", "absent" in stderr)
 
     # A subset of regions must still run, and must report the subset's coverage.
     snapshot = json.loads(SAMPLE.read_text())

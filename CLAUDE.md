@@ -312,6 +312,12 @@ corn-price/
   **The assumption this rests on -- that a stratum's year-to-year shape is its
   state's -- is the weakest claim in the bundle** and is named in the output's
   `not_captured`. Brief 0003.
+- **The stratum is cross-checked against node 2, not just declared.** The
+  runner compares `production_weights.csv`'s stratum against node 2's
+  `metadata.baselines.regions[key].regime` and refuses to start on a mismatch or
+  on an absent regime. An irrigated distribution is about half the width of a
+  rainfed one, so a stale snapshot would be a silently wrong answer -- the same
+  finding Copilot raised one node upstream, one field over.
 - **The periods are coupled.** Node 2's baseline window and `yield_history.csv`
   must be the same, or rank *n* stops meaning the same thing on both sides. The
   runner refuses to start on a mismatch rather than answering wrongly.
@@ -350,8 +356,9 @@ corn-price/
 
 ### Verified results (2026-09-21)
 
-- `check_price.py`: **133/133 checks pass** (63 before the Copilot review, 73
-  before brief 0002's export exposure, 95 before brief 0003's strata).
+- `check_price.py`: **148/148 checks pass** (63 before the first Copilot review,
+  73 before brief 0002's export exposure, 95 before brief 0003's strata, 133
+  before brief 0003's Copilot review).
 - **The 2012 drought, end to end:** feeding each region's actual 2012 rank
   reproduces a US yield shock of **-22.64%** against the actual national
   deviation of **-22.23%**. The case is dated 2012 as well as ranked 2012, so

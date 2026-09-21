@@ -341,6 +341,18 @@ def main():
                   "stratum is not 'the better half'"
             )
 
+        # The share of the WHOLE STATE's acres that are irrigated, carried on
+        # every row including the strata. irrigated_share below describes the
+        # region, which for a stratum is 1 or 0 by construction; this one stays
+        # comparable across split and unsplit rows and is the figure node 1's
+        # 20 percent split threshold is applied to.
+        state_acres = series.get(ACRES)
+        state_irrigated = series.get(ACRES_IRRIGATED)
+        state_irrigated_share = (
+            "" if state_irrigated is None or not state_acres
+            else f"{state_irrigated / state_acres:.4f}"
+        )
+
         rows.append({
             "region_key": key,
             "state": state,
@@ -352,6 +364,7 @@ def main():
             "acres_harvested": f"{acres:.0f}",
             "acres_irrigated": acres_irrigated,
             "irrigated_share": irrigated_share,
+            "state_irrigated_share": state_irrigated_share,
             "production_share_of_us": f"{production / us_production:.6f}",
             "method": method,
             "source": f"{NASS_VINTAGE}, Quick Stats bulk export",
@@ -412,8 +425,8 @@ def main():
             "two agree. A NASS (D) value means the figure was withheld for disclosure "
             "and is recorded as missing, never as zero. build_yield_history.py reads its "
             "region set from this table, so the two never drift apart. Which regions are "
-            "strata is declared in this script's STRATA map and in region_strata.csv, "
-            "never inferred from the spelling of a region key."
+            "strata is declared in this script's STRATA map and published in this "
+            "table's stratum column, never inferred from the spelling of a region key."
         ),
     }, indent=2) + "\n")
     log(f"wrote   {META_PATH.name}")

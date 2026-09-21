@@ -101,6 +101,13 @@ def load_weights():
             "irrigated_share": (
                 float(row["irrigated_share"]) if row["irrigated_share"] else None
             ),
+            # The whole state's irrigated share, on every row including the
+            # strata, so the figure stays comparable across split and unsplit
+            # regions. It is what node 1's 20% split threshold is applied to.
+            "state_irrigated_share": (
+                float(row["state_irrigated_share"])
+                if row.get("state_irrigated_share") else None
+            ),
             "production_share_of_us": float(row["production_share_of_us"]),
         }
     return out
@@ -229,6 +236,49 @@ def check_periods(node2_metadata, yield_meta):
     return local_period, upstream_period
 
 
+def check_baseline_regimes(node2_metadata, weights, keys):
+    """Node 2's water regime per region must match this model's stratum for it.
+
+    The stratum decides which observed distribution a rank is mapped onto, and
+    an irrigated stratum's distribution is roughly half the width of a rainfed
+    one. So a snapshot whose `ne_irrigated` was actually simulated rainfed --
+    a stale document, or a node 2 built before the split -- would have its rank
+    read against the wrong distribution and produce a confidently wrong number
+    with nothing visibly amiss.
+
+    Node 2 publishes the regime it used per region in its baselines metadata,
+    so this is checkable rather than assumed. Checked once, before any
+    weighting, and a mismatch is a failed run rather than a wrong answer. A
+    region that declares no regime at all is treated as a mismatch, not assumed
+    rainfed, for the same reason node 2 refuses that case.
+    """
+    regions = (node2_metadata.get("baselines") or {}).get("regions") or {}
+    expected = {"all": "rainfed", "rainfed": "rainfed", "irrigated": "irrigated"}
+    problems = []
+    for key in keys:
+        stratum = weights[key]["stratum"]
+        want = expected.get(stratum)
+        if want is None:
+            raise RunError(
+                f"{key}: production_weights.csv declares stratum {stratum!r}, which this "
+                f"runner has no expected upstream water regime for."
+            )
+        got = (regions.get(key) or {}).get("regime")
+        if got != want:
+            problems.append(f"{key}: this model expects {want!r}, the snapshot says "
+                            f"{got!r}" + (" (absent)" if got is None else ""))
+    if problems:
+        raise RunError(
+            "water regime mismatch between the upstream snapshot and this model's "
+            "strata:\n  " + "\n  ".join(problems) +
+            "\nThe stratum chooses which observed distribution a percentile rank is "
+            "mapped onto, and an irrigated distribution is about half the width of a "
+            "rainfed one, so a mismatch is a silently wrong answer rather than a rough "
+            "one. Run against a snapshot from a node 2 that simulates these regions the "
+            "way production_weights.csv says they are farmed."
+        )
+
+
 # ------------------------------------------------------------------- the model
 
 def process(snapshot, weights, deviations, observed_years, yield_meta, price_meta,
@@ -308,6 +358,7 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
             # for the mapping, and check_price.py asserts it.
             "dispersion_ratio": None if ratio is None else round(ratio, 2),
             "irrigated_share": info["irrigated_share"],
+            "state_irrigated_share": info["state_irrigated_share"],
             # How much this region's observed distribution was widened (rainfed)
             # or narrowed (irrigated) relative to its state's. Omitted for an
             # unsplit region, whose distribution is its own.
@@ -322,11 +373,15 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
         # absent legitimately: irrigated_share when NASS withheld the figure for
         # disclosure, and dispersion_ratio when the upstream document carries no
         # baseline quantiles for the region.
-        for optional in ("irrigated_share", "dispersion_ratio",
-                         "stratum_dispersion_ratio",
+        for optional in ("irrigated_share", "state_irrigated_share",
+                         "dispersion_ratio", "stratum_dispersion_ratio",
                          "yield_anomaly_simulated_pct"):
             if regions[-1].get(optional) is None:
                 del regions[-1][optional]
+
+    # Every key is known to have a table row by here, so this reports every
+    # regime mismatch at once rather than only the first.
+    check_baseline_regimes(metadata, weights, [r["region_key"] for r in regions])
 
     total_weight = sum(r["_weight_raw"] for r in regions)
     if total_weight <= 0:
@@ -506,7 +561,7 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
                 "source": weights_meta["source"],
                 "source_last_modified": weights_meta["source_last_modified"],
                 "built_at": weights_meta["built_at"],
-                "coverage_share_of_us_all_ten": weights_meta["coverage_share_of_us"],
+                "coverage_share_of_us_all_regions": weights_meta["coverage_share_of_us"],
             },
             "yield_history": {
                 "vintage": yield_meta["vintage"],
@@ -581,7 +636,7 @@ REGION_COLUMNS = [
     "region_key", "state", "stratum", "date",
     "yield_percentile_rank", "yield_anomaly_simulated_pct", "yield_anomaly_real_pct",
     "dispersion_ratio", "production_weight", "contribution_pct",
-    "production_share_of_us", "irrigated_share",
+    "production_share_of_us", "irrigated_share", "state_irrigated_share",
     "acres_harvested", "trend_yield_bu_acre",
 ]
 
