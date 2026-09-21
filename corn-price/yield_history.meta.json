@@ -8,8 +8,8 @@
   "period": "1995-2024",
   "period_start": 1995,
   "period_end": 2024,
-  "built_at": "2026-09-20T05:21:22+00:00",
-  "detrending": "per-state ordinary least squares of yield on calendar year; deviation_pct is the residual as a percentage of the fitted line",
+  "built_at": "2026-09-21T22:44:35+00:00",
+  "detrending": "per-region ordinary least squares of yield on calendar year; deviation_pct is the residual as a percentage of the fitted line",
   "trends": {
     "ia": {
       "intercept_bu_acre": -4645.902039,
@@ -29,11 +29,17 @@
       "r2": 0.7075,
       "rmse_bu_acre": 11.174
     },
-    "ne": {
-      "intercept_bu_acre": -4121.627512,
-      "slope_bu_acre_per_year": 2.131257,
-      "r2": 0.7451,
-      "rmse_bu_acre": 10.79
+    "ne_irrigated": {
+      "intercept_bu_acre": -5316.735522,
+      "slope_bu_acre_per_year": 2.739913,
+      "r2": 0.8591,
+      "rmse_bu_acre": 7.681
+    },
+    "ne_rainfed": {
+      "intercept_bu_acre": -5015.318928,
+      "slope_bu_acre_per_year": 2.557957,
+      "r2": 0.383,
+      "rmse_bu_acre": 22.475
     },
     "in": {
       "intercept_bu_acre": -4743.228254,
@@ -59,11 +65,17 @@
       "r2": 0.7725,
       "rmse_bu_acre": 9.748
     },
-    "ks": {
-      "intercept_bu_acre": 714.075788,
-      "slope_bu_acre_per_year": -0.289878,
-      "r2": 0.0327,
-      "rmse_bu_acre": 13.641
+    "ks_irrigated": {
+      "intercept_bu_acre": -2336.569739,
+      "slope_bu_acre_per_year": 1.255043,
+      "r2": 0.351,
+      "rmse_bu_acre": 11.815
+    },
+    "ks_rainfed": {
+      "intercept_bu_acre": -1750.157101,
+      "slope_bu_acre_per_year": 0.918261,
+      "r2": 0.1034,
+      "rmse_bu_acre": 18.717
     },
     "mo": {
       "intercept_bu_acre": -3712.827957,
@@ -72,6 +84,59 @@
       "rmse_bu_acre": 20.6
     }
   },
+  "strata": {
+    "ne_irrigated": "irrigated",
+    "ne_rainfed": "rainfed",
+    "ks_irrigated": "irrigated",
+    "ks_rainfed": "rainfed"
+  },
+  "stratum_rescaling": {
+    "ne_irrigated": {
+      "dispersion_ratio": 0.4953,
+      "ratio_period": "1995-2018",
+      "ratio_years": 24,
+      "stratum_spread_p10_p90_pct": 10.14,
+      "state_spread_p10_p90_pct": 20.47,
+      "series": "CORN, GRAIN, IRRIGATED - YIELD, MEASURED IN BU / ACRE",
+      "trend_fitted_over": "1995-2018",
+      "trend_r2": 0.8591,
+      "trend_rmse_bu_acre": 7.681
+    },
+    "ne_rainfed": {
+      "dispersion_ratio": 2.108,
+      "ratio_period": "1995-2018",
+      "ratio_years": 24,
+      "stratum_spread_p10_p90_pct": 43.14,
+      "state_spread_p10_p90_pct": 20.47,
+      "series": "CORN, GRAIN, NON-IRRIGATED - YIELD, MEASURED IN BU / ACRE",
+      "trend_fitted_over": "1995-2018",
+      "trend_r2": 0.383,
+      "trend_rmse_bu_acre": 22.475
+    },
+    "ks_irrigated": {
+      "dispersion_ratio": 0.6174,
+      "ratio_period": "1995-2018",
+      "ratio_years": 24,
+      "stratum_spread_p10_p90_pct": 16.43,
+      "state_spread_p10_p90_pct": 26.61,
+      "series": "CORN, GRAIN, IRRIGATED - YIELD, MEASURED IN BU / ACRE",
+      "trend_fitted_over": "1995-2018",
+      "trend_r2": 0.351,
+      "trend_rmse_bu_acre": 11.815
+    },
+    "ks_rainfed": {
+      "dispersion_ratio": 1.9365,
+      "ratio_period": "1995-2018",
+      "ratio_years": 24,
+      "stratum_spread_p10_p90_pct": 51.53,
+      "state_spread_p10_p90_pct": 26.61,
+      "series": "CORN, GRAIN, NON-IRRIGATED - YIELD, MEASURED IN BU / ACRE",
+      "trend_fitted_over": "1995-2018",
+      "trend_r2": 0.1034,
+      "trend_rmse_bu_acre": 18.717
+    }
+  },
+  "stratum_rescaling_method": "NASS publishes a state-level annual IRRIGATED and NON-IRRIGATED corn yield for the split states, but both series end in 2018, so 2019-2024 are absent and they cannot be a stratum's history over this window. They are used instead to MEASURE SCALE: over the overlapping years, each stratum's detrended p10-p90 spread is divided by its state's over exactly the same years, and the resulting dispersion_ratio multiplies the state's full-window deviation series. Each stratum's trend LEVEL is fitted on its own published years and extrapolated over the rest of the window, so the production weight uses irrigated corn's yield level rather than the state's. A stratum row's yield_bu_acre is therefore DERIVED (trend x (1 + deviation)), not a published NASS figure; trend_yield_bu_acre and deviation_pct are what the runner reads. Unsplit regions have dispersion_ratio 1 and are untouched. ASSUMES the measured ratio holds over 2019-2024, and that a stratum's year-to-year shape is its state's -- the stronger of the two, because in a year when irrigation is the whole story the two strata do not move together at all.",
   "regions_source": "production_weights.csv",
-  "note": "The period must match node 2's baseline window (1995-2024), because a percentile rank from node 2 is read as the same quantile of this distribution. The runner refuses to run if the two disagree. The region set is read from production_weights.csv rather than redefined here, so the two committed tables cannot drift apart."
+  "note": "The period must match node 2's baseline window (1995-2024), because a percentile rank from node 2 is read as the same quantile of this distribution. The runner refuses to run if the two disagree. The region set and each region's stratum are read from production_weights.csv rather than redefined here, so the two committed tables cannot drift apart and no stratum is inferred from the spelling of a region key."
 }

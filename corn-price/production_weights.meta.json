@@ -5,24 +5,35 @@
   "series": [
     "CORN, GRAIN - ACRES HARVESTED",
     "CORN, GRAIN - PRODUCTION, MEASURED IN BU",
-    "CORN, GRAIN, IRRIGATED - ACRES HARVESTED"
+    "CORN, GRAIN, IRRIGATED - ACRES HARVESTED",
+    "CORN, GRAIN, IRRIGATED, ENTIRE CROP - YIELD, MEASURED IN BU / ACRE",
+    "CORN, GRAIN, IRRIGATED, NONE OF CROP - YIELD, MEASURED IN BU / ACRE"
   ],
-  "built_at": "2026-09-20T05:19:49+00:00",
+  "built_at": "2026-09-21T22:42:59+00:00",
   "us_production_bu": 13722442966.0,
   "coverage_share_of_us": 0.824706,
   "regions": [
     "ia",
     "il",
     "in",
-    "ks",
+    "ks_irrigated",
+    "ks_rainfed",
     "mn",
     "mo",
-    "ne",
+    "ne_irrigated",
+    "ne_rainfed",
     "oh",
     "sd",
     "wi"
   ],
+  "strata": {
+    "ne_irrigated": "irrigated",
+    "ne_rainfed": "rainfed",
+    "ks_irrigated": "irrigated",
+    "ks_rainfed": "rainfed"
+  },
+  "stratum_apportionment": "A split state's irrigated stratum takes its published CORN, GRAIN, IRRIGATED - ACRES HARVESTED and the rainfed stratum the remainder. NASS publishes no irrigated production at any aggregation level, so the published state production is apportioned between the two in proportion to acres times the operation-class yields (CORN, GRAIN, IRRIGATED, ENTIRE CROP - YIELD, MEASURED IN BU / ACRE and CORN, GRAIN, IRRIGATED, NONE OF CROP - YIELD, MEASURED IN BU / ACRE), then normalised back onto the published state total. Acres and production therefore sum to the published state figures exactly and the coverage share is unchanged by the split.",
   "withheld": [],
   "regions_verified_against": "/Users/john/repos/agromet-bundles/crop-weather/regions.csv",
-  "note": "Region keys originate in agromet-bundles/crop-weather/regions.csv and are not redefined here; pass --regions <that file> to have the build check the two agree. A NASS (D) value means the figure was withheld for disclosure and is recorded as missing, never as zero. build_yield_history.py reads its region set from this table, so the two never drift apart."
+  "note": "Region keys originate in agromet-bundles/crop-weather/regions.csv and are not redefined here; pass --regions <that file> to have the build check the two agree. A NASS (D) value means the figure was withheld for disclosure and is recorded as missing, never as zero. build_yield_history.py reads its region set from this table, so the two never drift apart. Which regions are strata is declared in this script's STRATA map and in region_strata.csv, never inferred from the spelling of a region key."
 }

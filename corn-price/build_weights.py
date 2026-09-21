@@ -16,12 +16,18 @@ Source, public and needing no API key:
   used to place its region points, so the two nodes agree by construction. The
   Quick Stats *API* needs a key; the bulk export does not.
 
-Four series are read, all at AGG_LEVEL_DESC = STATE and DOMAIN_DESC = TOTAL:
+Six series are read, all at AGG_LEVEL_DESC = STATE and DOMAIN_DESC = TOTAL:
 
     CORN, GRAIN - PRODUCTION, MEASURED IN BU
     CORN, GRAIN - ACRES HARVESTED
     CORN, GRAIN, IRRIGATED - ACRES HARVESTED
+    CORN, GRAIN, IRRIGATED, ENTIRE CROP - YIELD, MEASURED IN BU / ACRE
+    CORN, GRAIN, IRRIGATED, NONE OF CROP - YIELD, MEASURED IN BU / ACRE
     CORN, GRAIN - PRODUCTION, MEASURED IN BU   (NATIONAL, for the coverage share)
+
+The last two exist only to apportion a split state's production between its
+irrigated and rainfed strata, because NASS publishes no irrigated production at
+any aggregation level. See apportion_state.
 
 CLASS/PRODN/UTIL are pinned through SHORT_DESC because "CORN - PRODUCTION" also
 covers silage, which is a different crop area.
@@ -67,14 +73,40 @@ USER_AGENT = "modelhome-ag-commodity-bundles/corn-price (build_weights.py)"
 # built and run one repo at a time and a build script must not require a sibling
 # checkout to exist.
 REGIONS = {
-    "ia": "IA", "il": "IL", "mn": "MN", "ne": "NE", "in": "IN",
-    "sd": "SD", "oh": "OH", "wi": "WI", "ks": "KS", "mo": "MO",
+    "ia": "IA", "il": "IL", "mn": "MN",
+    "ne_irrigated": "NE", "ne_rainfed": "NE",
+    "in": "IN", "sd": "SD", "oh": "OH", "wi": "WI",
+    "ks_irrigated": "KS", "ks_rainfed": "KS",
+    "mo": "MO",
+}
+
+# Which regions are one stratum of a split state, and which stratum they are.
+# Node 1 splits a state when irrigation covers 20 percent or more of its
+# harvested corn acres (NE 52.7, KS 25.4); every other state keeps one row.
+#
+# Nothing here infers a stratum from the spelling of a region key -- this table
+# says so, exactly as node 2's water_regime.csv does for its water regime. A key
+# named "ne_irrigated" with no entry here would be treated as an unsplit region
+# and the build would fail on the acre reconciliation rather than guess.
+STRATA = {
+    "ne_irrigated": "irrigated", "ne_rainfed": "rainfed",
+    "ks_irrigated": "irrigated", "ks_rainfed": "rainfed",
 }
 
 PRODUCTION = "CORN, GRAIN - PRODUCTION, MEASURED IN BU"
 ACRES = "CORN, GRAIN - ACRES HARVESTED"
 ACRES_IRRIGATED = "CORN, GRAIN, IRRIGATED - ACRES HARVESTED"
-WANTED = {PRODUCTION, ACRES, ACRES_IRRIGATED}
+# NASS publishes no irrigated PRODUCTION at any aggregation level, so a stratum's
+# production cannot be read off. These two operation-class yields are what node 1
+# used to apportion county production between its strata, and this script uses
+# them the same way at state level, so the two nodes split a state by the same
+# rule. They compare operations that irrigate their ENTIRE corn crop with those
+# that irrigate NONE of it; an operation irrigating PART of its crop is in
+# neither class, which is why these are a ratio for apportionment and never a
+# yield level in their own right.
+YIELD_ENTIRE = "CORN, GRAIN, IRRIGATED, ENTIRE CROP - YIELD, MEASURED IN BU / ACRE"
+YIELD_NONE = "CORN, GRAIN, IRRIGATED, NONE OF CROP - YIELD, MEASURED IN BU / ACRE"
+WANTED = {PRODUCTION, ACRES, ACRES_IRRIGATED, YIELD_ENTIRE, YIELD_NONE}
 
 # NASS withholds a value rather than publishing it when disclosure would
 # identify an operation. These are the markers it uses in VALUE.
@@ -171,6 +203,62 @@ def regions_from_upstream(path):
     return upstream
 
 
+def apportion_state(state, series):
+    """Split one state's published acres and production between its two strata.
+
+    Acres are published: the irrigated stratum takes
+    CORN, GRAIN, IRRIGATED - ACRES HARVESTED and the rainfed stratum takes the
+    remainder, so the two always sum to the published state total exactly.
+
+    Production is not published per stratum anywhere, so it is apportioned in
+    proportion to acres times that stratum's operation-class yield, then
+    normalised back onto the published state production. Normalising is what
+    keeps the coverage share invariant: splitting a state must move production
+    between two rows, never create or destroy any, so the ten-state coverage
+    figure is the same 82.47% before and after.
+
+    Returns {stratum: {"acres": a, "production": p, "yield": y}}.
+    """
+    acres = series.get(ACRES)
+    production = series.get(PRODUCTION)
+    acres_irrigated = series.get(ACRES_IRRIGATED)
+    yield_entire = series.get(YIELD_ENTIRE)
+    yield_none = series.get(YIELD_NONE)
+    for name, value in (("acres", acres), ("production", production),
+                        ("irrigated acres", acres_irrigated),
+                        ("entire-crop yield", yield_entire),
+                        ("none-of-crop yield", yield_none)):
+        if value is None:
+            raise SystemExit(
+                f"{state}: {name} is missing or withheld, so this state cannot be "
+                f"split into strata. Node 1 splits it, so node 3 must too; fix the "
+                f"series rather than falling back to one unsplit row."
+            )
+    if acres_irrigated > acres:
+        raise SystemExit(
+            f"{state}: irrigated acres ({acres_irrigated:.0f}) exceed harvested acres "
+            f"({acres:.0f}); the NASS export may have changed"
+        )
+    acres_rainfed = acres - acres_irrigated
+    raw_irrigated = acres_irrigated * yield_entire
+    raw_rainfed = acres_rainfed * yield_none
+    total_raw = raw_irrigated + raw_rainfed
+    if total_raw <= 0:
+        raise SystemExit(f"{state}: cannot apportion production between strata")
+    return {
+        "irrigated": {
+            "acres": acres_irrigated,
+            "production": production * raw_irrigated / total_raw,
+            "yield": yield_entire,
+        },
+        "rainfed": {
+            "acres": acres_rainfed,
+            "production": production * raw_rainfed / total_raw,
+            "yield": yield_none,
+        },
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -196,32 +284,96 @@ def main():
     if missing:
         raise SystemExit(f"no state rows for region_key(s) {missing}; export may have changed")
 
+    # Apportion each split state once, so both of its strata are derived from
+    # one reconciliation rather than two independent ones.
+    split = {}
+    for key, state in REGIONS.items():
+        if key in STRATA and state not in split:
+            split[state] = apportion_state(state, by_state[state])
+
     rows = []
     for key, state in REGIONS.items():
         series = by_state[state]
-        production = series.get(PRODUCTION)
-        acres = series.get(ACRES)
-        if production is None or acres is None:
-            raise SystemExit(f"{key}: missing production or acres; cannot weight this region")
-        irrigated = series.get(ACRES_IRRIGATED)
+        stratum = STRATA.get(key)
         withheld_here = (state, ACRES_IRRIGATED) in withheld
+
+        if stratum is None:
+            production = series.get(PRODUCTION)
+            acres = series.get(ACRES)
+            if production is None or acres is None:
+                raise SystemExit(
+                    f"{key}: missing production or acres; cannot weight this region"
+                )
+            irrigated = series.get(ACRES_IRRIGATED)
+            # Blank, not 0, when NASS withheld the figure: the runner must not
+            # read a withheld value as "this state does not irrigate".
+            acres_irrigated = "" if irrigated is None else f"{irrigated:.0f}"
+            irrigated_share = "" if irrigated is None else f"{irrigated / acres:.4f}"
+            method = (
+                "state totals as published, not split into strata: irrigation covers "
+                "less than node 1's 20 percent threshold here. Irrigated share is "
+                "CORN, GRAIN, IRRIGATED - ACRES HARVESTED over CORN, GRAIN - ACRES HARVESTED"
+                + (" (irrigated acres withheld for disclosure)" if withheld_here else "")
+            )
+        else:
+            part = split[state][stratum]
+            acres = part["acres"]
+            production = part["production"]
+            # A stratum is defined by its irrigation, so its irrigated share is
+            # 1 or 0 by construction rather than measured.
+            acres_irrigated = f"{acres:.0f}" if stratum == "irrigated" else "0"
+            irrigated_share = "1.0000" if stratum == "irrigated" else "0.0000"
+            method = (
+                f"{stratum} stratum of a state node 1 splits: acres are "
+                + ("CORN, GRAIN, IRRIGATED - ACRES HARVESTED as published"
+                   if stratum == "irrigated"
+                   else "CORN, GRAIN - ACRES HARVESTED minus the published irrigated acres")
+                + ". NASS publishes no irrigated production at any level, so the state's "
+                  "published production is apportioned between the two strata in "
+                  "proportion to acres times that stratum's operation-class yield "
+                  f"({YIELD_ENTIRE if stratum == 'irrigated' else YIELD_NONE}, "
+                  f"{part['yield']:.1f} bu/acre), then normalised back onto the published "
+                  "state total so the two strata sum to it exactly and the coverage share "
+                  "is unchanged. This mixes an operation-class yield with an area split, "
+                  "the same apportionment node 1 uses for its stratum weights. Operations "
+                  "irrigating their entire crop out-yield those irrigating none in these "
+                  "two states, but the sign of that gap flips in Iowa and Ohio, so a "
+                  "stratum is not 'the better half'"
+            )
+
         rows.append({
             "region_key": key,
             "state": state,
+            # "all" for a state node 1 does not split. Declared, never inferred
+            # from the spelling of the key -- build_yield_history.py and the
+            # runner both read the stratum from this column.
+            "stratum": stratum or "all",
             "production_bu": f"{production:.0f}",
             "acres_harvested": f"{acres:.0f}",
-            # Blank, not 0, when NASS withheld the figure: the runner must not
-            # read a withheld value as "this state does not irrigate".
-            "acres_irrigated": "" if irrigated is None else f"{irrigated:.0f}",
-            "irrigated_share": "" if irrigated is None else f"{irrigated / acres:.4f}",
+            "acres_irrigated": acres_irrigated,
+            "irrigated_share": irrigated_share,
             "production_share_of_us": f"{production / us_production:.6f}",
-            "method": (
-                "state totals as published; irrigated share is "
-                "CORN, GRAIN, IRRIGATED - ACRES HARVESTED over CORN, GRAIN - ACRES HARVESTED"
-                + (" (irrigated acres withheld for disclosure)" if withheld_here else "")
-            ),
+            "method": method,
             "source": f"{NASS_VINTAGE}, Quick Stats bulk export",
         })
+
+    # The split must move production between rows, never create or destroy it.
+    for state, parts in split.items():
+        published_acres = by_state[state][ACRES]
+        published_production = by_state[state][PRODUCTION]
+        acres_sum = sum(p["acres"] for p in parts.values())
+        production_sum = sum(p["production"] for p in parts.values())
+        if abs(acres_sum - published_acres) > 0.5:
+            raise SystemExit(
+                f"{state}: stratum acres sum to {acres_sum:.0f} but NASS publishes "
+                f"{published_acres:.0f}"
+            )
+        if abs(production_sum - published_production) > 1.0:
+            raise SystemExit(
+                f"{state}: stratum production sums to {production_sum:.0f} but NASS "
+                f"publishes {published_production:.0f}"
+            )
+        log(f"{state}: split reconciles to published acres and production")
 
     covered = sum(float(r["production_share_of_us"]) for r in rows)
     log(f"coverage: {covered * 100:.2f}% of US corn-for-grain production")
@@ -241,6 +393,17 @@ def main():
         "us_production_bu": us_production,
         "coverage_share_of_us": round(covered, 6),
         "regions": sorted(REGIONS),
+        "strata": STRATA,
+        "stratum_apportionment": (
+            "A split state's irrigated stratum takes its published "
+            "CORN, GRAIN, IRRIGATED - ACRES HARVESTED and the rainfed stratum the "
+            "remainder. NASS publishes no irrigated production at any aggregation level, "
+            "so the published state production is apportioned between the two in "
+            "proportion to acres times the operation-class yields "
+            f"({YIELD_ENTIRE} and {YIELD_NONE}), then normalised back onto the published "
+            "state total. Acres and production therefore sum to the published state "
+            "figures exactly and the coverage share is unchanged by the split."
+        ),
         "withheld": [f"{s}: {d}" for s, d in withheld if s in REGIONS.values()],
         "regions_verified_against": args.regions or None,
         "note": (
@@ -248,7 +411,9 @@ def main():
             "not redefined here; pass --regions <that file> to have the build check the "
             "two agree. A NASS (D) value means the figure was withheld for disclosure "
             "and is recorded as missing, never as zero. build_yield_history.py reads its "
-            "region set from this table, so the two never drift apart."
+            "region set from this table, so the two never drift apart. Which regions are "
+            "strata is declared in this script's STRATA map and in region_strata.csv, "
+            "never inferred from the spelling of a region key."
         ),
     }, indent=2) + "\n")
     log(f"wrote   {META_PATH.name}")

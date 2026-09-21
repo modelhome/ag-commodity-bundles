@@ -86,9 +86,9 @@ to 13,414 kg/ha for Iowa and 0 to 5,795 kg/ha for Kansas. Measured as a
 p10-to-p90 spread against each state's *observed* detrended yield distribution,
 node 2 is over-dispersed everywhere:
 
-| region | ia | il | mn | ne | in | sd | oh | wi | ks | mo |
-|---|---|---|---|---|---|---|---|---|---|---|
-| dispersion ratio | 6.6 | 6.0 | 5.3 | **11.7** | 5.7 | 9.2 | 4.2 | 6.6 | **9.9** | 3.1 |
+| region | ia | il | mn | ne_irr | ne_rain | in | sd | oh | wi | ks_irr | ks_rain | mo |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| dispersion ratio | 6.6 | 6.0 | 5.3 | 2.8 | 4.4 | 5.7 | **9.2** | 4.2 | 6.6 | 2.7 | 5.6 | 3.1 |
 
 A real state yield moves by roughly ±10 points against trend in a normal year
 and ±25 in an extreme one. Node 2's percentages move by three to twelve times
@@ -114,8 +114,8 @@ The size of this correction is visible in the output rather than taken on trust:
 every region ships `yield_anomaly_simulated_pct` and `dispersion_ratio`
 alongside `yield_anomaly_real_pct`, and the national block ships
 `us_yield_shock_pct_unmapped` — what the figure would have been without the
-rescaling. On the committed sample that is **+3.70% unmapped against +0.23%
-used**, a factor of sixteen.
+rescaling. On the committed sample that is **+2.83% unmapped against +0.19%
+used**, a factor of fifteen.
 
 The **period must match**. A percentile rank from node 2 is read as the same
 quantile of this model's distribution, so rank *n* of thirty has to mean the
@@ -124,9 +124,70 @@ against `yield_history.meta.json` and refuses to run on a mismatch, rather than
 producing a quietly wrong answer.
 
 **What this does not fix.** The mapping assumes node 2's rank is informative
-even where its magnitude is not. In a heavily irrigated state a rainfed
-simulation can rank a dry year far too low, and the mapping will carry that
-wrong rank faithfully onto the real distribution.
+even where its magnitude is not. If a rank is set wrongly upstream, the mapping
+carries it faithfully onto the real distribution.
+
+### 1b. Irrigated and rainfed parts of a state are separate regions
+
+Node 1 splits a state into an irrigated and a rainfed stratum when irrigation
+covers 20% or more of its harvested corn acres. That is Nebraska (52.7%) and
+Kansas (25.4%); the other eight states keep one region each. Node 2 simulates
+the two irrigated strata with soil-moisture-triggered irrigation rather than as
+dryland. So this model sees **twelve** regions — `ia, il, mn, ne_irrigated,
+ne_rainfed, in, sd, oh, wi, ks_irrigated, ks_rainfed, mo` — and `ne` and `ks` no
+longer exist.
+
+Each stratum needs its own observed distribution, because **irrigation damps
+year-to-year yield variation** and reading an irrigated stratum's rank against
+its state's blended spread would overstate its swings by about a factor of two.
+Measured on NASS's own irrigated and non-irrigated state yield series, detrended
+p10–p90 spread:
+
+| | irrigated | state | non-irrigated |
+|---|---|---|---|
+| NE | 10.1 pts (**0.50×**) | 20.5 | 43.1 (**2.11×**) |
+| KS | 16.4 pts (**0.62×**) | 26.6 | 51.5 (**1.94×**) |
+
+**The awkward part, stated plainly.** NASS publishes those per-stratum series
+for Nebraska and Kansas, but **both end in 2018** — 24 of the 30 years in the
+window, missing 2019–2024, which includes the 2022 western drought. There is
+therefore no per-stratum history covering the window, and the window cannot move
+because it is node 2's.
+
+What ships instead is a **rescaling**: a stratum's distribution is its state's
+1995–2024 detrended series with its spread multiplied by the ratio measured over
+the overlapping years, placed on the stratum's own fitted trend level. Every
+measured ratio, the years behind it and the NASS series it came from ship in
+`metadata.tables.yield_history.stratum_rescaling`, and each region's own factor
+is on its row as `stratum_dispersion_ratio`.
+
+This assumes two things, and the second is the stronger:
+
+1. that the ratio measured over the published years holds over the unpublished
+   ones; and
+2. that a stratum's **year-to-year shape** is its state's — it is only the width
+   that differs.
+
+In a season when irrigation is the whole story the two strata do not move
+together at all, and this model carries that error rather than detecting it. It
+is named in the output's `not_captured` for that reason. If NASS resumes the
+series, or a county-level reconstruction becomes practical, the rescaling should
+be replaced by measurement.
+
+**A stratum is not "the better half".** Operations irrigating their entire corn
+crop out-yield those irrigating none by 105% in Kansas and 55% in Nebraska, but
+yield 8% *less* in Iowa and 20% less in Ohio, where irrigation sits on marginal
+ground. Nothing here assumes irrigated means better, and no code infers a
+stratum from the spelling of a region key — `production_weights.csv` declares
+it, exactly as node 2's `water_regime.csv` declares its water regime.
+
+**Irrigation supply is unconstrained upstream.** Node 2 irrigates whenever soil
+moisture falls to its trigger, with no aquifer decline, allocation limit or
+pumping ceiling, so an irrigated stratum's drought protection is an **upper
+bound**. This model's distributions come from realised NASS yields and already
+embed whatever supply limits were real, so the *scale* is not inflated by that
+assumption; what it cannot correct is a **rank** set too high upstream in a
+severely water-short year. That remains node 2's to fix.
 
 ### 2. It combines the regions by production weight
 
@@ -148,7 +209,7 @@ fixed-weather by design and carries no genetics or management gain; this model
 applies a per-state ordinary least squares trend on the observed 1995–2024
 series, evaluated at the run's year.
 
-**Coverage is stated, never scaled away.** The ten states node 1 defines are
+**Coverage is stated, never scaled away.** The twelve regions node 1 defines are
 **82.47%** of US corn-for-grain production (2022 Census). Three national figures
 ship and the difference between them is the point:
 
@@ -160,7 +221,7 @@ ship and the difference between them is the point:
   the transmission was fitted on the national yield deviation.
 - `us_production_shock_bu` — the shortfall or surplus in bushels.
 
-Running on a subset reports that subset's coverage, not the full ten states'.
+Running on a subset reports that subset's coverage, not the full set's.
 
 ### 3. It applies a transmission fitted on a matching regressor
 
@@ -311,8 +372,8 @@ a reader can see how old the economics are.
 
 | Table | Rows | Source | Built by |
 |---|---|---|---|
-| `production_weights.csv` | 10 | USDA NASS **2022 Census of Agriculture**, state-level `CORN, GRAIN - PRODUCTION, MEASURED IN BU`, `CORN, GRAIN - ACRES HARVESTED`, `CORN, GRAIN, IRRIGATED - ACRES HARVESTED`, from `nass.usda.gov/datasets/qs.census2022.txt.gz` (~310 MB, keyless). **The same file and vintage node 1 used** to place its region points. | `build_weights.py` |
-| `yield_history.csv` | 300 | USDA NASS survey series `CORN, GRAIN - YIELD, MEASURED IN BU / ACRE`, state / annual / final estimate, 1995–2024, from `nass.usda.gov/datasets/qs.crops_<YYYYMMDD>.txt.gz` (~1.1 GB, keyless) | `build_yield_history.py` |
+| `production_weights.csv` | 12 | USDA NASS **2022 Census of Agriculture**, state-level `CORN, GRAIN - PRODUCTION, MEASURED IN BU`, `CORN, GRAIN - ACRES HARVESTED`, `CORN, GRAIN, IRRIGATED - ACRES HARVESTED`, plus `CORN, GRAIN, IRRIGATED, ENTIRE CROP - YIELD` and `..., NONE OF CROP - YIELD` to apportion a split state between its strata, from `nass.usda.gov/datasets/qs.census2022.txt.gz` (~310 MB, keyless). **The same file and vintage node 1 used** to place its region points. | `build_weights.py` |
+| `yield_history.csv` | 360 | USDA NASS survey series `CORN, GRAIN - YIELD, MEASURED IN BU / ACRE`, state / annual / final estimate, 1995–2024, from `nass.usda.gov/datasets/qs.crops_<YYYYMMDD>.txt.gz` (~1.1 GB, keyless), plus the `IRRIGATED` and `NON-IRRIGATED` counterparts (1995–2018 only) to size each stratum | `build_yield_history.py` |
 | `price_history.csv` | 52 | USDA ERS **Feed Grains Yearbook Tables — All Years**, US annual marketing-year corn: area, yield, production, price received (Table 1) and beginning/ending stocks, total use and exports (Table 4) | `build_price_history.py` |
 | `transmission.json` | — | fitted from `price_history.csv` | `build_transmission.py` |
 
@@ -327,6 +388,13 @@ Notes worth keeping:
 - About three lines in four of that export contain **NUL bytes** in trailing
   fields, which makes Python's `csv` module raise `line contains NUL`. The build
   script strips them. The census export has none.
+- The stratum yield series is pinned through its full `SHORT_DESC`, because
+  NASS also publishes each of them `MEASURED IN BU / NET PLANTED ACRE` — a
+  different denominator that would silently mix a planted-acre yield into a
+  harvested-acre series.
+- A stratum row's `yield_bu_acre` is **derived** (trend × (1 + deviation)), not a
+  published NASS figure. `trend_yield_bu_acre` and `deviation_pct` are what the
+  runner reads.
 - The Quick Stats **API needs a key** (401 without one). The bulk exports do not.
 - The current marketing year in the ERS data is a **WASDE projection**, not an
   outcome. It is flagged `is_projection`, excluded from both the trend fit and
@@ -334,47 +402,69 @@ Notes worth keeping:
 
 ## Verified results
 
-Sample run, 2026-09-20, all ten regions from a real node 1 → node 2 chain:
+Sample run, 2026-09-21, all twelve regions from a real node 1 → node 2 chain:
 
 | region | rank | node 2 % | mapped % | dispersion | weight | contribution |
 |---|---|---|---|---|---|---|
-| ia | 70.0 | +22.0 | +1.10 | 6.6× | 0.217 | +0.24 |
-| il | 50.0 | +1.9 | 0.00 | 6.0× | 0.183 | 0.00 |
-| in | 83.3 | +26.0 | +4.35 | 5.7× | 0.087 | +0.38 |
-| ks | 40.0 | −39.9 | −2.78 | 9.9× | 0.048 | −0.13 |
-| mn | 30.0 | −41.8 | −5.45 | 5.3× | 0.124 | −0.68 |
-| mo | 60.0 | +12.5 | +5.78 | 3.1× | 0.042 | +0.24 |
-| ne | 80.0 | +51.9 | +4.12 | 11.7× | 0.138 | +0.57 |
-| oh | 50.0 | −0.5 | 0.00 | 4.2× | 0.052 | 0.00 |
-| sd | 26.7 | −43.7 | −3.88 | 9.2× | 0.064 | −0.25 |
-| wi | 40.0 | −14.8 | −2.01 | 6.6× | 0.046 | −0.09 |
+| ia | 70.0 | +22.0 | +1.10 | 6.6x | 0.216 | +0.24 |
+| il | 50.0 | +1.9 | 0.00 | 6.0x | 0.181 | 0.00 |
+| in | 83.3 | +26.0 | +4.35 | 5.7x | 0.086 | +0.38 |
+| ks_irrigated | 63.3 | +7.8 | +1.75 | 2.7x | 0.020 | +0.03 |
+| ks_rainfed | 60.0 | +57.8 | +4.28 | 5.6x | 0.031 | +0.13 |
+| mn | 30.0 | -41.8 | -5.45 | 5.3x | 0.123 | -0.67 |
+| mo | 60.0 | +12.5 | +5.78 | 3.1x | 0.041 | +0.24 |
+| ne_irrigated | 50.0 | +0.2 | 0.00 | 2.8x | 0.086 | 0.00 |
+| ne_rainfed | 70.0 | +40.4 | +4.07 | 4.4x | 0.055 | +0.22 |
+| oh | 50.0 | -0.5 | 0.00 | 4.2x | 0.051 | 0.00 |
+| sd | 26.7 | -43.7 | -3.88 | 9.2x | 0.064 | -0.25 |
+| wi | 40.0 | -14.8 | -2.01 | 6.6x | 0.046 | -0.09 |
 
-Covered shock **+0.28%**, US shock **+0.23%** over 82.5% of production
-(**+3.70%** unmapped). Price impact **−0.18%** [−0.29, −0.09], or **−$0.009/bu**
-on a $4.80 reference. A genuinely unremarkable season implies almost nothing,
-which is the behaviour to expect.
+Covered shock **+0.24%**, US shock **+0.19%** over 82.5% of production
+(**+2.83%** unmapped). Price impact **-0.15%** [-0.25, -0.08], or
+**-$0.007/bu** on a $4.80 reference. A genuinely unremarkable season implies
+almost nothing, which is the behaviour to expect.
 
-`check_price.py`: **95/95 checks pass**. Notably:
+Note `ne_irrigated` at rank 50.0 against `ne_rainfed` at 70.0 on the same
+weather: the two strata carry different signal, which is the point of splitting
+them.
 
-- **The 2012 drought, end to end.** Feeding each state's *actual* 2012 rank
-  reproduces a US yield shock of **−22.04%** against the actual national
-  deviation of **−22.23%** — 0.19 points. That tests the mapping, the weighting
-  and the coverage assumption against a real outcome rather than against
-  themselves. The actual 2012 price move (+10.8%) falls inside the implied range
-  (+9.0% to +32.1%), which is a weak test on one observation and is labelled as
-  one.
-- A tenth-percentile season everywhere gives a −9.72% US shock and a **+7.91%**
-  [+3.90, +13.13] price impact: right sign, plausible size.
-- Node 2 is over-dispersed in every region (3.1× to 11.7×), and the two most
-  over-dispersed regions are the two most irrigated.
+`check_price.py`: **133/133 checks pass** (95 before brief 0003). Notably:
+
+- **The 2012 drought, end to end.** Feeding each region's *actual* 2012 rank
+  reproduces a US yield shock of **-22.64%** against the actual national
+  deviation of **-22.23%** - 0.41 points, and the case is dated 2012 so the
+  weights use 2012 trend yields. That tests the mapping, the stratum rescaling,
+  the weighting and the coverage assumption against a real outcome rather than
+  against themselves. The actual 2012 price move (+10.8%) falls inside the
+  implied range (+9.3% to +33.3%), which is a weak test on one observation and
+  is labelled as one.
+- A tenth-percentile season everywhere gives a **-10.18%** US shock and a
+  **+8.29%** [+4.08, +13.80] price impact: right sign, plausible size.
+- Node 2 is over-dispersed in every region (2.7x to 9.2x), and within each split
+  state the irrigated stratum is the **less** over-dispersed of the two -
+  irrigation damps the simulation and the observation alike, which is the
+  direction the rescaling assumes.
+- Each split state's two strata sum to its published 2022 Census harvested
+  acres, and the twelve production shares still sum to 82.47%: splitting moves
+  production between rows without creating or destroying any.
+- The committed stratum spreads match the recorded dispersion ratios exactly,
+  so `yield_history.csv` and `yield_history.meta.json` cannot describe different
+  rescalings.
+- No code infers a stratum from the spelling of a region key; a check asserts
+  that directly against `runner.py`'s source.
 - An unknown `region_key` exits 1 naming the key and the table, with no
   traceback; a baseline-window mismatch exits 1 naming both windows; an *absent*
   upstream baseline window also exits 1 rather than assuming compatibility; and
   a non-finite or non-positive reference price is rejected.
 - No region field is emitted as `null` under a declared `number` type. The
-  schema format has no nullable type, so an optional field with no value —
+  schema format has no nullable type, so an optional field with no value -
   `irrigated_share` where USDA withheld it, `dispersion_ratio` where the
-  upstream document carries no baseline spread — is **omitted**, never nulled.
+  upstream document carries no baseline spread, `stratum_dispersion_ratio` on an
+  unsplit region - is **omitted**, never nulled.
+
+The Modelfile validates against the platform validator with no annotation
+warnings, and `check_schema_compatibility` confirms the input still binds node
+2's `corn_yield_snapshot` and is still refused by `corn_yield_trajectory`.
 
 `docker run --network none` reproduces the local run **byte-identically** apart
 from `generated_at`.
@@ -388,24 +478,29 @@ uv run --python 3.12 --no-project python corn-price/check_price.py run/corn_pric
 
 ## Limitations
 
-1. **Residual irrigation bias in Nebraska and Kansas.** Quantile mapping
-   compresses it — their observed distributions already contain their irrigated
-   acres — but does not remove it, because a rainfed simulation can misrank an
-   irrigated state's dry year and the mapping carries that rank faithfully. The
-   real fix is an irrigation-aware node 2, not a correction here.
-2. **The rank is only as good as node 2.** Everything downstream inherits it.
-3. **The percentile is discrete over thirty baseline years**, so it has about
+1. **A stratum's year-to-year shape is its state's.** Each stratum's observed
+   distribution is its state's series rescaled in width, because NASS's
+   per-stratum series end in 2018. In a season when irrigation is the whole
+   story the two strata do not move together at all, and this model carries that
+   error rather than detecting it. It is the weakest assumption in the bundle.
+2. **Irrigation supply is unconstrained upstream**, so an irrigated stratum's
+   drought protection is an upper bound and its rank may be set too high in a
+   severely water-short year. This model's scale is built from realised yields
+   and is not inflated by that, but nothing here can correct a wrong rank. Node
+   2's to fix.
+3. **The rank is only as good as node 2.** Everything downstream inherits it.
+4. **The percentile is discrete over thirty baseline years**, so it has about
    3.3-point granularity, and the mapped anomaly inherits that.
-4. **R² 0.329 on 50 annual observations.** The transmission is a reduced form,
+5. **R² 0.329 on 50 annual observations.** The transmission is a reduced form,
    not a structural model, and the bootstrap interval is wide because the
    relationship genuinely is not known more precisely than that.
-5. **The uncovered 17.5% of US corn is assumed to be at trend.** Named in the
+6. **The uncovered 17.5% of US corn is assumed to be at trend.** Named in the
    output, but it is an assumption, and in a widespread drought it is wrong in
    the direction that understates the shock.
-6. **Early in the season node 2's projection is mostly climatology**, so its
+7. **Early in the season node 2's projection is mostly climatology**, so its
    anomaly is near zero by construction and so is this model's output. That is
    expected, not a defect.
-7. **The 2022 Census is a single year.** Harvested acres from one census year
+8. **The 2022 Census is a single year.** Harvested acres from one census year
    are the weight; a five-year average would be more representative and is
    listed as follow-up.
 
@@ -437,8 +532,10 @@ no price at all). Three routes, in increasing cost:
    and the output would have to start stamping `retrieved_at`, the source and
    the endpoints, with the `determinism` annotation reworded to match.
 
-**Other follow-ups.** A five-year average for the production weights rather than
-a single census year; a within-season transmission fitted on futures rather than
+**Other follow-ups.** Replacing the stratum rescaling with measurement, if NASS
+resumes its irrigated and non-irrigated state yield series (discontinued after
+2018) or if a county-level reconstruction becomes practical; a five-year average
+for the production weights rather than a single census year; a within-season transmission fitted on futures rather than
 an annual cash price, which would need a futures source and would let the model
 answer "what does this do to December corn" rather than "to the marketing-year
 average"; and revisiting stocks-to-use in a price-*level* specification, where

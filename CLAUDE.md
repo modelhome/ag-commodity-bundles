@@ -209,7 +209,12 @@ are.
 
 Bundles in this flow share one region set, and **node 1 owns it**. The
 `region_key` originates in `agromet-bundles/crop-weather/regions.csv` -- `ia,
-il, mn, ne, in, sd, oh, wi, ks, mo` -- and propagates unchanged. This repo joins
+il, mn, ne_irrigated, ne_rainfed, in, sd, oh, wi, ks_irrigated, ks_rainfed, mo`
+-- and propagates unchanged. Node 1 splits a state into an irrigated and a
+rainfed stratum when irrigation covers 20% or more of its harvested corn acres,
+which is Nebraska and Kansas; `ne` and `ks` no longer exist. **A region's
+stratum is declared in a committed table, never inferred from the spelling of
+its key**, the discipline node 2 asserts for its water regime. This repo joins
 on the key and adds its own attributes (production weights, irrigation shares,
 historical yield distributions); it never redefines the key, and an input
 `region_key` with no matching table row **fails the run loudly** rather than
@@ -267,8 +272,8 @@ corn-price/
   Modelfile.toml            one input (node 2's snapshot), two JSON outputs
   Dockerfile                python:3.12-slim, no pip layer at all
   runner.py                 the model
-  production_weights.csv    per-region production share and irrigation share
-  yield_history.csv         observed detrended state yields, 1995-2024 (300 rows)
+  production_weights.csv    per-region stratum, production share and irrigation share
+  yield_history.csv         observed detrended yields, 1995-2024 (360 rows)
   price_history.csv         national balance sheet, exports and price, 1975-2026 (52 rows)
   transmission.json         the committed fit, its selection trail and bootstrap
   *.meta.json               provenance for the three built tables
@@ -277,7 +282,7 @@ corn-price/
   build_price_history.py    one-time balance-sheet build (not in the image)
   build_transmission.py     one-time fit (not in the image)
   check_price.py            validation, needs Python 3.11+ (not in the image)
-  sample_input.json         a real ten-region node 2 output
+  sample_input.json         a real twelve-region node 2 output
   README.md
 ```
 
@@ -285,16 +290,28 @@ corn-price/
 
 - **The rank is used, not the percentage. This is the one thing to understand
   before changing anything here.** Node 2's `yield_anomaly_pct` comes from an
-  uncalibrated rainfed point simulation and is 3.1 to 11.7 times more dispersed
+  uncalibrated point simulation and is 2.7 to 9.2 times more dispersed
   than the observed distribution of the same state's yield around trend. Its
   *rank* survives that; its *magnitude* does not. Each region's
   `yield_percentile_rank` is quantile-mapped onto that state's observed
   1995-2024 detrended distribution. On the committed sample the unmapped
-  national figure would have been +3.70% against the +0.23% actually used.
+  national figure would have been +2.83% against the +0.19% actually used.
 - **The mapping is median-centred**, because node 2's anomaly is median-relative
   and a rank of 50 must therefore imply a zero shock. A least-squares trend
   through a left-skewed yield series also sits below the median, so uncentred
   quantiles would carry a standing positive offset (about +2.4 points in Ohio).
+- **Strata get a rescaled state distribution, because no per-stratum history
+  exists.** NASS publishes an annual state-level `CORN, GRAIN, IRRIGATED - YIELD`
+  and a `NON-IRRIGATED` counterpart for NE and KS, but **both end in 2018** --
+  24 of the 30 years, missing the 2022 drought. So a stratum's distribution is
+  its state's 1995-2024 series with its spread multiplied by the stratum/state
+  dispersion ratio measured over the overlapping years (NE 0.495 / 2.108, KS
+  0.617 / 1.936), placed on the stratum's own fitted trend level. Irrigation
+  damps real yield variation by about half; reusing the state distribution
+  unchanged would have overstated an irrigated stratum's volatility twofold.
+  **The assumption this rests on -- that a stratum's year-to-year shape is its
+  state's -- is the weakest claim in the bundle** and is named in the output's
+  `not_captured`. Brief 0003.
 - **The periods are coupled.** Node 2's baseline window and `yield_history.csv`
   must be the same, or rank *n* stops meaning the same thing on both sides. The
   runner refuses to start on a mismatch rather than answering wrongly.
@@ -331,20 +348,20 @@ corn-price/
   `not_captured`, in the output's `role` string and in the Modelfile `not_for`.
   Brief 0002.
 
-### Verified results (2026-09-20)
+### Verified results (2026-09-21)
 
-- `check_price.py`: **95/95 checks pass** (63 before the Copilot review, 73
-  before brief 0002's export exposure).
-- **The 2012 drought, end to end:** feeding each state's actual 2012 rank
-  reproduces a US yield shock of **-21.92%** against the actual national
+- `check_price.py`: **133/133 checks pass** (63 before the Copilot review, 73
+  before brief 0002's export exposure, 95 before brief 0003's strata).
+- **The 2012 drought, end to end:** feeding each region's actual 2012 rank
+  reproduces a US yield shock of **-22.64%** against the actual national
   deviation of **-22.23%**. The case is dated 2012 as well as ranked 2012, so
   the weights use 2012 trend yields -- getting that wrong was a review finding. That validates the mapping, the weighting and the
   coverage assumption against a real outcome rather than against themselves.
-- A tenth-percentile season everywhere: -9.72% US shock, **+7.91%** [+3.90,
-  +13.13] price impact. Right sign, plausible size.
-- Sample run (ten regions, real node 1 -> node 2 chain): covered shock +0.28%,
-  US shock +0.23% over 82.5% of production, price impact **-0.18%** [-0.29,
-  -0.09] = -$0.009/bu on $4.80. Under a second.
+- A tenth-percentile season everywhere: -10.18% US shock, **+8.29%** [+4.08,
+  +13.80] price impact. Right sign, plausible size.
+- Sample run (twelve regions, real node 1 -> node 2 chain): covered shock
+  +0.24%, US shock +0.19% over 82.5% of production, price impact **-0.15%**
+  [-0.25, -0.08] = -$0.007/bu on $4.80. Under a second.
 - **Transmission:** `dlog_price = a + b0*d + c*d[t-1]`, 1976-2025, n=50.
   b0 = **-0.7826** (se 0.2834, t -2.76), bootstrap 95% [-1.269, -0.393],
   R^2 0.329.
@@ -364,10 +381,13 @@ corn-price/
 ### Task list
 
 1. Add the model on the local Model Home stack from the branch subfolder URL and
-   run it with a node 2 output; mark the PR ready once it passes.
+   run it with a twelve-region node 2 output; mark the PR ready once it passes.
 2. After merge: register on Model Home from `main` and compose it after the US
-   Corn Yield model in the daily flow.
-3. Follow-ups, detailed in the bundle README: a live or market reference price
+   Corn Yield model in the daily flow. Brief 0003 changed the region set, so
+   **node 2 must be re-registered too** and any stored flow input from before
+   the split is stale.
+3. Follow-ups, detailed in the bundle README: replacing the stratum rescaling
+   with measurement if NASS resumes the series; a live or market reference price
    (three routes, cheapest first), five-year average production weights, a
    within-season futures transmission, and stocks-to-use revisited in a
    price-level specification.
