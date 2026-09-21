@@ -290,7 +290,7 @@ corn-price/
 
 - **The rank is used, not the percentage. This is the one thing to understand
   before changing anything here.** Node 2's `yield_anomaly_pct` comes from an
-  uncalibrated point simulation and is 2.7 to 9.2 times more dispersed
+  uncalibrated point simulation and is 3.1 to 9.2 times more dispersed
   than the observed distribution of the same state's yield around trend. Its
   *rank* survives that; its *magnitude* does not. Each region's
   `yield_percentile_rank` is quantile-mapped onto that state's observed
@@ -309,6 +309,12 @@ corn-price/
   0.617 / 1.936), placed on the stratum's own fitted trend level. Irrigation
   damps real yield variation by about half; reusing the state distribution
   unchanged would have overstated an irrigated stratum's volatility twofold.
+  **The measured ratios are then normalised to their production-weighted mean**
+  (NE 1.086, KS 1.394), because marginal spreads only add linearly when the
+  strata move together and they do not -- they correlate 0.31 in NE and 0.80 in
+  KS. Un-normalised, the split would have inflated Kansas's say in the national
+  figure by 39%. Normalising keeps the measured irrigated:rainfed proportion and
+  makes a split state recombine to its own observed swing.
   **The assumption this rests on -- that a stratum's year-to-year shape is its
   state's -- is the weakest claim in the bundle** and is named in the output's
   `not_captured`. Brief 0003.
@@ -356,19 +362,23 @@ corn-price/
 
 ### Verified results (2026-09-21)
 
-- `check_price.py`: **148/148 checks pass** (63 before the first Copilot review,
+- `check_price.py`: **154/154 checks pass** (63 before the first Copilot review,
   73 before brief 0002's export exposure, 95 before brief 0003's strata, 133
-  before brief 0003's Copilot review).
+  before brief 0003's Copilot review, 148 before the ratio normalisation).
 - **The 2012 drought, end to end:** feeding each region's actual 2012 rank
-  reproduces a US yield shock of **-22.64%** against the actual national
+  reproduces a US yield shock of **-21.97%** against the actual national
   deviation of **-22.23%**. The case is dated 2012 as well as ranked 2012, so
   the weights use 2012 trend yields -- getting that wrong was a review finding. That validates the mapping, the weighting and the
   coverage assumption against a real outcome rather than against themselves.
-- A tenth-percentile season everywhere: -10.18% US shock, **+8.29%** [+4.08,
-  +13.80] price impact. Right sign, plausible size.
+- A tenth-percentile season everywhere: -9.80% US shock, **+7.97%** [+3.93,
+  +13.25] price impact. Right sign, plausible size.
 - Sample run (twelve regions, real node 1 -> node 2 chain): covered shock
-  +0.24%, US shock +0.19% over 82.5% of production, price impact **-0.15%**
-  [-0.25, -0.08] = -$0.007/bu on $4.80. Under a second.
+  +0.17%, US shock +0.14% over 82.5% of production, price impact **-0.11%**
+  [-0.18, -0.06] = -$0.005/bu on $4.80. Under a second.
+- **Splitting a state is weight-neutral nationally.** Backtested on the national
+  yield deviation 1995-2018 (n=24), the twelve-region model reproduces the
+  ten-region model's RMSE of 1.19 points exactly. The split buys stratum
+  resolution, not national accuracy, and the honest claim is that it costs none.
 - **Transmission:** `dlog_price = a + b0*d + c*d[t-1]`, 1976-2025, n=50.
   b0 = **-0.7826** (se 0.2834, t -2.76), bootstrap 95% [-1.269, -0.393],
   R^2 0.329.

@@ -227,6 +227,29 @@ def check_stratum_rescaling(document, weights, deviations, metas):
         check(f"{key}: the ratio's series is pinned to a harvested-acre yield",
               detail["series"].endswith("MEASURED IN BU / ACRE"), detail["series"])
 
+    # Splitting a state must not change how much say it has in the national
+    # figure. The raw marginal ratios do not recombine to the state -- they
+    # average to 1.086 (NE) and 1.394 (KS), because the two strata correlate
+    # only 0.31 and 0.80 -- so they are normalised. This asserts the property
+    # that normalisation exists to guarantee, and that the measured proportion
+    # between the two strata survives it.
+    for state, (irr, rain) in SPLIT_STATES.items():
+        if not (irr in rescaling and rain in rescaling):
+            continue
+        total = sum(float(weights[k]["production_share_of_us"]) for k in (irr, rain))
+        mean = sum(float(weights[k]["production_share_of_us"]) / total
+                   * rescaling[k]["dispersion_ratio"] for k in (irr, rain))
+        check(f"{state}: splitting it does not change its weight in the national figure",
+              close(mean, 1.0, 1e-3), f"production-weighted mean of ratios = {mean:.4f}")
+        got = rescaling[irr]["dispersion_ratio"] / rescaling[rain]["dispersion_ratio"]
+        want = (rescaling[irr]["dispersion_ratio_measured"]
+                / rescaling[rain]["dispersion_ratio_measured"])
+        check(f"{state}: normalisation preserves the measured irrigated:rainfed proportion",
+              close(got, want, 1e-3), f"{got:.4f} vs measured {want:.4f}")
+        check(f"{state}: the raw marginal ratios are kept alongside the normalised ones",
+              "dispersion_ratio_measured" in rescaling[irr]
+              and "state_normalisation_divisor" in rescaling[irr])
+
     # Both of a state's strata are the SAME state series scaled by their own
     # ratio, so the ratio of their committed spreads must equal the ratio of
     # their recorded factors, exactly. That is a property the committed table

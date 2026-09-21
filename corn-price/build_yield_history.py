@@ -104,7 +104,7 @@ def log(message):
 
 
 def load_regions():
-    """({region_key: STATE}, {region_key: stratum}) from production_weights.csv."""
+    """({region_key: STATE}, {region_key: stratum}, {region_key: share}) from weights."""
     if not WEIGHTS_PATH.exists():
         raise SystemExit(
             f"{WEIGHTS_PATH.name} is missing. It defines the region set this table is "
@@ -122,6 +122,9 @@ def load_regions():
         )
     regions = {r["region_key"]: r["state"] for r in rows}
     strata = {r["region_key"]: r["stratum"] for r in rows}
+    # Production shares, used to normalise a split state's stratum ratios so
+    # they recombine to the state's own swing. See normalise_ratios.
+    shares = {r["region_key"]: float(r["production_share_of_us"]) for r in rows}
     unknown = sorted(set(strata.values()) - {"all"} - set(STRATUM_SHORT_DESC))
     if unknown:
         raise SystemExit(
@@ -130,7 +133,7 @@ def load_regions():
         )
     split = sum(1 for v in strata.values() if v != "all")
     log(f"regions: {len(regions)} read from {WEIGHTS_PATH.name} ({split} strata)")
-    return regions, strata
+    return regions, strata, shares
 
 
 def current_crops_filename():
@@ -257,6 +260,45 @@ def spread(deviations):
     return quantile(values, 0.9) - quantile(values, 0.1)
 
 
+def normalise_ratios(ratios, shares, state):
+    """Make a state's stratum ratios preserve the state's own aggregate swing.
+
+    The raw ratios are each measured against the state marginally: the
+    irrigated series' spread over the state's, and the rainfed series' over the
+    state's. Used as they are measured, they do NOT recombine to the state.
+    Production-weighting them gives 1.086 for Nebraska and 1.394 for Kansas, not
+    1.0, so splitting a state and adding its halves back up would hand it 8.6%
+    and 39.4% more influence over the national shock than treating it as one
+    region did.
+
+    That is an artifact, not a modelling choice. Marginal spreads add linearly
+    only when the two series move together, and they do not: over the published
+    years the irrigated and non-irrigated deviations correlate 0.31 in Nebraska
+    and 0.80 in Kansas. The real state series already embeds that imperfect
+    correlation and is therefore narrower than the weighted sum of its parts.
+    Assuming one shared shape throws the diversification away and overshoots.
+
+    The state series is the quantity this model has thirty trustworthy years of,
+    so it is the one to preserve: the ratios are divided by their own
+    production-weighted mean. The strata stay differentiated in exactly the
+    measured proportion -- the irrigated-to-rainfed ratio is untouched -- and
+    the state's contribution to the national figure is what its own observed
+    distribution says it should be.
+
+    The cost, stated because it is real: each stratum's spread no longer equals
+    its own measured marginal spread. Nebraska's irrigated stratum becomes
+    0.456 of the state rather than the measured 0.495. Per-stratum figures are
+    intermediate here and the national figure is the output, so preserving the
+    aggregate is the right trade -- but a consumer reading a single stratum row
+    should know its width is set by that choice.
+    """
+    total = sum(shares.values())
+    mean = sum(shares[k] / total * ratios[k] for k in ratios)
+    if mean <= 0:
+        raise SystemExit(f"{state}: stratum ratios average to {mean}; cannot normalise")
+    return {k: v / mean for k, v in ratios.items()}, mean
+
+
 def rescale_to_stratum(state_series, stratum_series, key, stratum):
     """How much wider a stratum's yield varies than its state's, and its own trend.
 
@@ -317,11 +359,11 @@ def rescale_to_stratum(state_series, stratum_series, key, stratum):
         "trend_r2": round(r2, 4),
         "trend_rmse_bu_acre": round(rmse, 3),
     }
-    return ratio, intercept, slope, detail
+    return [ratio, intercept, slope, detail]
 
 
 def main():
-    regions, strata = load_regions()
+    regions, strata, shares = load_regions()
     filename = current_crops_filename()
     log(f"current survey export: {filename}")
     archive, last_modified = download(LISTING_URL + filename, CACHE / filename)
@@ -329,6 +371,49 @@ def main():
     by_series = read_state_yields(archive, regions)
     by_state = by_series[SHORT_DESC]
     expected = PERIOD_END - PERIOD_START + 1
+
+    # Pass 1: measure each stratum against its state, then normalise each split
+    # state's ratios so they recombine to that state's own swing (see
+    # normalise_ratios). This has to happen before any row is written, because
+    # a ratio depends on the other stratum of the same state.
+    measured = {}
+    for key, state in regions.items():
+        stratum = strata[key]
+        if stratum == "all":
+            continue
+        stratum_series = by_series[STRATUM_SHORT_DESC[stratum]].get(state, {})
+        if not stratum_series:
+            raise SystemExit(
+                f"{key}: no {STRATUM_SHORT_DESC[stratum]!r} rows for {state}. "
+                f"production_weights.csv declares this region a {stratum} stratum, "
+                f"so the series that sizes its variability must exist."
+            )
+        measured[key] = rescale_to_stratum(
+            by_state.get(state, {}), stratum_series, key, stratum
+        )
+
+    by_split_state = {}
+    for key in measured:
+        by_split_state.setdefault(regions[key], []).append(key)
+    ratios = {}
+    for state, keys in by_split_state.items():
+        if len(keys) < 2:
+            raise SystemExit(
+                f"{state}: only {keys} present. A split state's ratios are normalised "
+                f"against each other, so both strata must be in the region set."
+            )
+        raw = {k: measured[k][0] for k in keys}
+        normalised, mean = normalise_ratios(raw, {k: shares[k] for k in keys}, state)
+        ratios.update(normalised)
+        log(f"{state}: raw ratios " + ", ".join(f"{k} x{raw[k]:.3f}" for k in keys)
+            + f" average to {mean:.3f}; normalised to "
+            + ", ".join(f"x{normalised[k]:.3f}" for k in keys))
+        for k in keys:
+            measured[k][3].update({
+                "dispersion_ratio_measured": round(raw[k], 4),
+                "dispersion_ratio": round(normalised[k], 4),
+                "state_normalisation_divisor": round(mean, 4),
+            })
 
     rows = []
     trends = {}
@@ -353,16 +438,8 @@ def main():
         if stratum == "all":
             ratio = 1.0
         else:
-            stratum_series = by_series[STRATUM_SHORT_DESC[stratum]].get(state, {})
-            if not stratum_series:
-                raise SystemExit(
-                    f"{key}: no {STRATUM_SHORT_DESC[stratum]!r} rows for {state}. "
-                    f"production_weights.csv declares this region a {stratum} stratum, "
-                    f"so the series that sizes its variability must exist."
-                )
-            ratio, intercept, slope, detail = rescale_to_stratum(
-                series, stratum_series, key, stratum
-            )
+            _, intercept, slope, detail = measured[key]
+            ratio = ratios[key]
             rescalings[key] = detail
             # The state trend statistics describe the state's fit, not this
             # stratum's; the stratum's own are in `detail`.
@@ -431,7 +508,15 @@ def main():
             "are used instead to MEASURE SCALE: over the overlapping years, each "
             "stratum's detrended p10-p90 spread is divided by its state's over exactly "
             "the same years, and the resulting dispersion_ratio multiplies the state's "
-            "full-window deviation series. Each stratum's trend LEVEL is fitted on its "
+            "full-window deviation series, AFTER being normalised so a split state's two "
+            "ratios recombine to that state's own swing: the raw marginal ratios average "
+            "to 1.086 (NE) and 1.394 (KS) rather than 1, because the two strata do not "
+            "move together (they correlate 0.31 and 0.80 over the published years) and a "
+            "shared-shape reconstruction therefore overshoots. Dividing by that mean "
+            "keeps the measured irrigated-to-rainfed proportion exactly and stops the "
+            "split inflating a state's weight in the national figure; the cost is that a "
+            "stratum's spread is no longer its own measured marginal spread, which is "
+            "recorded per region as dispersion_ratio_measured. Each stratum's trend LEVEL is fitted on its "
             "own published years and extrapolated over the rest of the window, so the "
             "production weight uses irrigated corn's yield level rather than the "
             "state's. A stratum row's yield_bu_acre is therefore DERIVED "

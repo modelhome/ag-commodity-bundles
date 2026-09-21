@@ -307,14 +307,62 @@ within-coverage weights agree to within 0.0004 (`ne_irrigated` 0.0804 vs node 1'
 0.0808; `ks_irrigated` 0.0177 vs 0.0173). The eight unsplit states match node 1
 exactly.
 
+### C-5. The raw marginal ratios do not recombine to the state (found in review)
+
+Raised while explaining the shared-shape limitation, after the first Copilot
+review. Each stratum's ratio is measured against its state marginally, so
+production-weighting them should give 1.0 if the two strata really shared one
+shape. They give **1.086** (NE) and **1.394** (KS). Marginal spreads add
+linearly only under perfect correlation; measured over the published years the
+two strata correlate **0.31** in Nebraska and **0.80** in Kansas, so the real
+state series is narrower than the sum of its parts and a shared-shape
+reconstruction overshoots. Used raw, the split handed Nebraska 8.6% and Kansas
+39.4% more influence over the national shock than treating each as one region
+did -- an artifact, not a decision.
+
+Fixed by `normalise_ratios`: divide each state's ratios by their own
+production-weighted mean. The measured irrigated-to-rainfed proportion is
+preserved exactly; the state recombines to its own observed swing. Shipped
+factors NE 0.456 / 1.941, KS 0.443 / 1.388, with the raw measurements kept
+beside them as `dispersion_ratio_measured`. Cost: a stratum's spread is no
+longer its own measured marginal spread, which is stated in the meta file, the
+README and the output.
+
+Measured effect: the 2012 end-to-end case improved from -22.64% to **-21.97%**
+against the actual -22.23%, and a 24-year backtest of the national figure now
+reproduces the ten-region model's RMSE (1.19 points) exactly -- which is what a
+weight-neutral split should do.
+
+### C-6. Copilot review (PR #3): five findings, all valid
+
+1. **`irrigated_share` changed meaning on a split row** and the schema still
+   described the old one. Now explicitly the region's own share, with a new
+   `state_irrigated_share` carrying the state figure on every row.
+2. **The upstream water regime was never checked.** Node 2 publishes it per
+   region; nothing compared it against this model's stratum, so a stale snapshot
+   would have had its rank read against a distribution of roughly twice or half
+   the right width. `check_baseline_regimes` now fails the run, reporting every
+   mismatch at once, and treats an absent regime as a mismatch. This is the same
+   class of finding Copilot raised on node 2's own PR, one field over.
+3. **`coverage_share_of_us_all_ten`** was a stale API name; renamed to
+   `coverage_share_of_us_all_regions`.
+4. **The `dispersion_ratio` description** still said the ratio is largest in the
+   irrigated states; node 2 now irrigates them, so it is lowest there.
+5. **`production_weights.meta.json` referenced `region_strata.csv`**, which C-1
+   removed. Regenerated.
+
+Checks 133 -> 148 -> **154** with C-5's normalisation.
+
 ## Risks and follow-ups
 
-- **The rescaling is the weakest link, and must be labelled as one.** It assumes
-  a ratio measured over 1995-2018 holds through 2024 and that the state's
-  year-by-year shape is the stratum's shape. The second assumption is the
-  stronger claim: in a year when irrigation is the whole story, the two strata's
-  deviations do not move together at all. This belongs in `not_captured` and the
-  README, not only in the plan.
+- **The rescaling is the weakest link, and is now quantified rather than just
+  labelled.** Over the published years the two strata correlate **0.31** in
+  Nebraska and 0.80 in Kansas, so the shared-shape assumption is close to
+  unfounded in Nebraska -- which is 12.7% of covered production against Kansas's
+  4.3%, i.e. weakest exactly where it costs most. In 2012 the model puts
+  irrigated Nebraska at -8.1% against an actual -3.0%, and rainfed at -34.7%
+  against an actual -55.4%. C-5's normalisation fixes the aggregate consequence;
+  it does not fix the shape. Named in `not_captured`, the README and here.
 - **NASS discontinued the series after 2018.** If it resumes, or if a
   county-level reconstruction becomes practical, the rescaling should be
   replaced by measurement. Worth a follow-up note in the README.
