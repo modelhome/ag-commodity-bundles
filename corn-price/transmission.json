@@ -6,8 +6,8 @@
     {
       "term": "deviation_lag",
       "description": "last season's shock; with a differenced dependent variable it mechanically enters this season's change",
-      "coefficient": 0.9690915495685596,
-      "t": 3.4207382242172555,
+      "coefficient": 0.9690915495685591,
+      "t": 3.4207382242172546,
       "r2_with_term": 0.328940679814806,
       "kept": true,
       "reason": "|t| = 3.42 >= 2.0"
@@ -15,27 +15,27 @@
     {
       "term": "shock_over_carryin",
       "description": "shock divided by carry-in stocks-to-use: the convex tight-stocks interaction",
-      "coefficient": -0.001189374876201743,
-      "t": -0.016259628526287546,
-      "r2_with_term": 0.32894453656778344,
+      "coefficient": -0.0011893748762015705,
+      "t": -0.016259628526285184,
+      "r2_with_term": 0.32894453656778355,
       "kept": false,
       "reason": "|t| = 0.02 < 2.0"
     },
     {
       "term": "shock_times_log_carryin",
       "description": "shock times log carry-in: the same interaction in a gentler functional form",
-      "coefficient": -0.004225717481291191,
-      "t": -0.010764469870407769,
-      "r2_with_term": 0.32894237020622674,
+      "coefficient": -0.004225717481290326,
+      "t": -0.010764469870405581,
+      "r2_with_term": 0.32894237020622685,
       "kept": false,
       "reason": "|t| = 0.01 < 2.0"
     },
     {
       "term": "log_carryin",
       "description": "log carry-in on its own: a level shift rather than an interaction",
-      "coefficient": 0.0024832323697810132,
-      "t": 0.049905320016301394,
-      "r2_with_term": 0.32897701047229533,
+      "coefficient": 0.00248323236978102,
+      "t": 0.04990532001630163,
+      "r2_with_term": 0.3289770104722951,
       "kept": false,
       "reason": "|t| = 0.05 < 2.0"
     }
@@ -47,23 +47,23 @@
   ],
   "coefficients": {
     "intercept": 0.010563324902938976,
-    "shock": -0.7825520359332103,
-    "deviation_lag": 0.9690915495685596
+    "shock": -0.7825520359332104,
+    "deviation_lag": 0.9690915495685591
   },
   "standard_errors": {
     "intercept": 0.0234287038138547,
     "shock": 0.2833903176253829,
-    "deviation_lag": 0.283298950708311
+    "deviation_lag": 0.28329895070831096
   },
   "t_statistics": {
     "intercept": 0.45087107621772454,
-    "shock": -2.7613929879131414,
-    "deviation_lag": 3.4207382242172555
+    "shock": -2.761392987913142,
+    "deviation_lag": 3.4207382242172546
   },
-  "shock_coefficient": -0.7825520359332103,
+  "shock_coefficient": -0.7825520359332104,
   "shock_coefficient_ci95": [
-    -1.269287697737908,
-    -0.39320352506264705
+    -1.2692876977379075,
+    -0.39320352506264733
   ],
   "bootstrap": {
     "draws": 10000,
@@ -78,7 +78,7 @@
     "residual_sd_dlog": 0.1656598401460886,
     "sample_period": "1976-2025",
     "residual_quantiles_dlog": {
-      "p05": -0.2201735029154304,
+      "p05": -0.22017350291543045,
       "p50": -0.021631251211415688,
       "p95": 0.28550646439134486
     }
@@ -88,6 +88,8 @@
   "not_captured": [
     "cross-commodity substitution: soybean and wheat prices move too, and corn acreage responds in the following season",
     "the ethanol and export demand channels separately; the reduced form sees only their aggregate",
+    "export demand shocks. The fit is on supply-side weather shocks: a shift in export demand, whatever causes it, is outside what this coefficient was estimated on, and applying it to one assumes a symmetry the fit does not demonstrate",
+    "trade policy. Tariffs, retaliation and export restrictions are absent entirely. Shocks of that kind are a handful of episodes in this 50-year window, too few to fit a term on under the selection rule above, and they move the price on announcement rather than over a marketing year. The committed export exposure in the output metadata is context for a separate downstream model, not something this transmission prices",
     "basis and the futures curve; the fit is on a cash marketing-year average price",
     "policy shocks, including changes to the Renewable Fuel Standard",
     "when within the season the price moves; this is an annual relationship"
@@ -104,9 +106,9 @@
   "price_history_vintage": {
     "source": "https://www.ers.usda.gov/media/5766/feed-grains-yearbook-tables-all-years.csv",
     "source_last_modified": null,
-    "built_at": "2026-09-20T05:21:22+00:00"
+    "built_at": "2026-09-21T00:19:16+00:00"
   },
-  "built_at": "2026-09-20T05:21:23+00:00",
+  "built_at": "2026-09-21T00:19:16+00:00",
   "sample": [
     {
       "year": 1976,

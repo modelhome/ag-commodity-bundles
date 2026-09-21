@@ -9,7 +9,7 @@
   "marketing_year": "Sep-Aug",
   "period": "1975-2026",
   "latest_complete_marketing_year": 2025,
-  "built_at": "2026-09-20T05:21:22+00:00",
+  "built_at": "2026-09-21T00:19:16+00:00",
   "national_yield_trend": {
     "intercept_bu_acre": -3631.25867,
     "slope_bu_acre_per_year": 1.883475,
@@ -23,8 +23,24 @@
     "carryin_stocks_to_use": 0.115218,
     "carryin_stocks_to_use_year": 2026
   },
+  "export_exposure": {
+    "current": {
+      "marketing_year": 2026,
+      "exports_mil_bu": 3275.0,
+      "export_share_of_use": 0.20241,
+      "is_projection": true
+    },
+    "latest_complete": {
+      "marketing_year": 2025,
+      "exports_mil_bu": 3425.0,
+      "export_share_of_use": 0.205336,
+      "is_projection": false
+    }
+  },
   "definitions": {
     "stocks_to_use": "ending stocks / total use, same marketing year; endogenous to that season's yield and therefore not used to condition it",
+    "exports": "a disappearance component of total use, in the same Table 4 as the stocks series. Already inside total_use_mil_bu, so it must never be added to it",
+    "export_share_of_use": "exports / total use, same marketing year. Exposure context for a downstream trade-policy model, not an input to this bundle's arithmetic and not a conditioner of the transmission: exports are endogenous within the marketing year, responding to the price they are reported beside",
     "carryin_stocks_to_use": "the prior marketing year's stocks_to_use; predetermined at planting and the conditioner the transmission uses"
   },
   "note": "The current marketing year is a WASDE projection, flagged is_projection and excluded from the trend fit and the transmission fit. It is the source of the runner's default reference price and carry-in ratio."

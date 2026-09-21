@@ -260,9 +260,47 @@ Named one by one in the output's `assumptions.not_captured`:
   acreage responds in the following season;
 - the ethanol and export demand channels separately — the reduced form sees only
   their aggregate;
+- **export demand shocks.** The fit is on supply-side weather shocks; a shift in
+  export demand, whatever causes it, is outside what this coefficient was
+  estimated on, and applying it to one assumes a symmetry the fit does not
+  demonstrate;
+- **trade policy.** Tariffs, retaliation and export restrictions are absent
+  entirely. Shocks of that kind are a handful of episodes in this fifty-year
+  window — too few to fit a term on under the selection rule above — and they
+  move the price on announcement rather than over a marketing year. See
+  [Export exposure](#export-exposure) for what this bundle does carry instead;
 - basis and the futures curve; the fit is on a cash marketing-year average price;
 - policy shocks, including changes to the Renewable Fuel Standard;
 - *when* within the season the price moves — this is an annual relationship.
+
+## Export exposure
+
+`price_history.csv` carries two columns this model never reads:
+`exports_mil_bu` and `export_share_of_use`, from the same ERS file, the same
+vintage and the same `Table 4--Corn: Supply and disappearance` that supplies the
+stocks series. The current and latest-complete figures are in
+`price_history.meta.json` and are copied into every run's
+`metadata.export_exposure`.
+
+Two things to be clear about, because a bushel figure printed beside a price
+impact invites exactly the inference this bundle refuses to make:
+
+- **Exports are a component of total use, not an addition to it.** A lost-export
+  scenario reduces the denominator as well as the numerator. Adding exports to
+  `total_use_mil_bu` double-counts them.
+- **This is exposure context, not a priced scenario.** The transmission is
+  fitted on supply-side weather shocks and does not price trade policy of any
+  kind — see the list above. The exposure is carried so that a separate
+  downstream trade-policy model can express a lost-sales scenario as a share of
+  US corn use against this bundle's own vintage, rather than re-sourcing the
+  balance sheet and silently picking a different one.
+
+Exports are also **endogenous within the marketing year** — they respond to the
+price they are reported beside — so, like `stocks_to_use`, the figure is context
+and never a conditioner of the transmission.
+
+Over the committed window the share runs from **6.6%** (2012, the drought year,
+when a short crop rationed exports first) to **32.8%** (1980).
 
 ## Committed tables
 
@@ -275,7 +313,7 @@ a reader can see how old the economics are.
 |---|---|---|---|
 | `production_weights.csv` | 10 | USDA NASS **2022 Census of Agriculture**, state-level `CORN, GRAIN - PRODUCTION, MEASURED IN BU`, `CORN, GRAIN - ACRES HARVESTED`, `CORN, GRAIN, IRRIGATED - ACRES HARVESTED`, from `nass.usda.gov/datasets/qs.census2022.txt.gz` (~310 MB, keyless). **The same file and vintage node 1 used** to place its region points. | `build_weights.py` |
 | `yield_history.csv` | 300 | USDA NASS survey series `CORN, GRAIN - YIELD, MEASURED IN BU / ACRE`, state / annual / final estimate, 1995–2024, from `nass.usda.gov/datasets/qs.crops_<YYYYMMDD>.txt.gz` (~1.1 GB, keyless) | `build_yield_history.py` |
-| `price_history.csv` | 52 | USDA ERS **Feed Grains Yearbook Tables — All Years**, US annual marketing-year corn: area, yield, production, price received (Table 1) and beginning/ending stocks and total use (Table 4) | `build_price_history.py` |
+| `price_history.csv` | 52 | USDA ERS **Feed Grains Yearbook Tables — All Years**, US annual marketing-year corn: area, yield, production, price received (Table 1) and beginning/ending stocks, total use and exports (Table 4) | `build_price_history.py` |
 | `transmission.json` | — | fitted from `price_history.csv` | `build_transmission.py` |
 
 Notes worth keeping:
@@ -316,7 +354,7 @@ Covered shock **+0.28%**, US shock **+0.23%** over 82.5% of production
 on a $4.80 reference. A genuinely unremarkable season implies almost nothing,
 which is the behaviour to expect.
 
-`check_price.py`: **73/73 checks pass**. Notably:
+`check_price.py`: **95/95 checks pass**. Notably:
 
 - **The 2012 drought, end to end.** Feeding each state's *actual* 2012 rank
   reproduces a US yield shock of **−22.04%** against the actual national

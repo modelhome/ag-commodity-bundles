@@ -311,6 +311,16 @@ def main():
             "acreage responds in the following season",
             "the ethanol and export demand channels separately; the reduced form sees "
             "only their aggregate",
+            "export demand shocks. The fit is on supply-side weather shocks: a shift in "
+            "export demand, whatever causes it, is outside what this coefficient was "
+            "estimated on, and applying it to one assumes a symmetry the fit does not "
+            "demonstrate",
+            "trade policy. Tariffs, retaliation and export restrictions are absent "
+            "entirely. Shocks of that kind are a handful of episodes in this 50-year "
+            "window, too few to fit a term on under the selection rule above, and they "
+            "move the price on announcement rather than over a marketing year. The "
+            "committed export exposure in the output metadata is context for a separate "
+            "downstream model, not something this transmission prices",
             "basis and the futures curve; the fit is on a cash marketing-year average price",
             "policy shocks, including changes to the Renewable Fuel Standard",
             "when within the season the price moves; this is an annual relationship",

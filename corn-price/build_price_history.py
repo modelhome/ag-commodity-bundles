@@ -20,7 +20,7 @@ Source, public and needing no API key:
 Two ERS tables are read, both US annual, marketing year Sep-Aug:
 
   Table 1  area harvested, yield per harvested acre, production, price received
-  Table 4  beginning stocks, ending stocks, total use
+  Table 4  beginning stocks, ending stocks, total use, exports
 
 Definitions, because "stocks-to-use" is ambiguous in the wild:
 
@@ -29,6 +29,13 @@ Definitions, because "stocks-to-use" is ambiguous in the wild:
                          season's own yield -- a short crop draws stocks down --
                          so it must not be used to condition that season's price
                          response.
+  export_share_of_use    exports / total use, same marketing year. Exports are a
+                         *component* of total use, not an addition to it, so a
+                         lost-export scenario reduces the denominator too.
+                         Endogenous within the marketing year in the same way
+                         stocks_to_use is -- exports respond to the price they
+                         sit beside -- so it is exposure context, never a
+                         conditioner of the transmission.
   carryin_stocks_to_use  the PRIOR marketing year's stocks_to_use, which by the
                          balance-sheet identity is this year's beginning stocks
                          over last year's use. Predetermined at planting, known
@@ -145,6 +152,10 @@ def main():
     beginning = read_series(rows, "Beginning stocks", TABLE_4)
     ending = read_series(rows, "Ending stocks", TABLE_4)
     total_use = read_series(rows, "Total use", TABLE_4)
+    # Exports are a disappearance line in the same Table 4 as the stocks series.
+    # Carried as exposure context for a downstream trade-policy model; nothing in
+    # this bundle's arithmetic reads it.
+    exports = read_series(rows, "Exports", TABLE_4)
 
     # The balance sheet is the binding constraint on the window.
     years = sorted(set(ending) & set(total_use) & set(yield_) & set(price))
@@ -152,6 +163,19 @@ def main():
     # of Y+1 is past. Taking "this year minus one" would mark the in-progress year
     # final whenever the script is rebuilt between January and August, putting a
     # WASDE projection into the trend and the transmission fit.
+    # Exports must cover the whole window. Unlike area or production, which are
+    # written as blanks when a year is absent, a missing export value would make
+    # a table that builds cleanly and only fails validation afterwards -- so it
+    # fails here, naming the years, the way read_series fails on a missing
+    # attribute. Never widen the window intersection above with exports: that
+    # would silently drop balance-sheet years instead.
+    missing_exports = [y for y in years if y not in exports]
+    if missing_exports:
+        raise SystemExit(
+            f"no export value for {missing_exports} in {TABLE_4!r}; exports must "
+            "cover every marketing year in the balance-sheet window"
+        )
+
     now = datetime.now(timezone.utc)
     latest_complete = now.year - 1 if now.month >= 9 else now.year - 2
     log(f"balance sheet {years[0]}-{years[-1]}; latest complete marketing year {latest_complete}")
@@ -181,6 +205,9 @@ def main():
             "beginning_stocks_mil_bu": f"{beginning[year]:.3f}" if year in beginning else "",
             "ending_stocks_mil_bu": f"{ending[year]:.3f}",
             "total_use_mil_bu": f"{total_use[year]:.3f}",
+            "exports_mil_bu": f"{exports[year]:.3f}",
+            # Fraction of a denominator that already contains the numerator.
+            "export_share_of_use": f"{exports[year] / total_use[year]:.6f}",
             "stocks_to_use": f"{stocks_to_use:.6f}",
             "carryin_stocks_to_use": "" if carryin is None else f"{carryin:.6f}",
             "price_usd_bu": f"{price[year]:.4f}",
@@ -194,6 +221,17 @@ def main():
     log(f"wrote   {OUT_PATH.name} ({len(out)} years)")
 
     current = out[-1]
+    complete_row = next(r for r in reversed(out) if r["year"] == latest_complete)
+
+    def exposure(row):
+        """The export exposure of one marketing year, for a downstream consumer."""
+        return {
+            "marketing_year": row["year"],
+            "exports_mil_bu": float(row["exports_mil_bu"]),
+            "export_share_of_use": float(row["export_share_of_use"]),
+            "is_projection": row["is_projection"] == "true",
+        }
+
     META_PATH.write_text(json.dumps({
         "vintage": ERS_VINTAGE,
         "source": ERS_URL,
@@ -216,9 +254,24 @@ def main():
             "carryin_stocks_to_use": float(current["carryin_stocks_to_use"]),
             "carryin_stocks_to_use_year": current["year"],
         },
+        # Both years, because a downstream consumer choosing a denominator should
+        # not have to guess whether it has an outcome or a WASDE projection.
+        "export_exposure": {
+            "current": exposure(current),
+            "latest_complete": exposure(complete_row),
+        },
         "definitions": {
             "stocks_to_use": "ending stocks / total use, same marketing year; endogenous "
                              "to that season's yield and therefore not used to condition it",
+            "exports": "a disappearance component of total use, in the same Table 4 as "
+                       "the stocks series. Already inside total_use_mil_bu, so it must "
+                       "never be added to it",
+            "export_share_of_use": "exports / total use, same marketing year. Exposure "
+                                   "context for a downstream trade-policy model, not an "
+                                   "input to this bundle's arithmetic and not a "
+                                   "conditioner of the transmission: exports are "
+                                   "endogenous within the marketing year, responding to "
+                                   "the price they are reported beside",
             "carryin_stocks_to_use": "the prior marketing year's stocks_to_use; "
                                      "predetermined at planting and the conditioner the "
                                      "transmission uses",
