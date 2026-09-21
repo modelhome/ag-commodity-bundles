@@ -269,7 +269,7 @@ corn-price/
   runner.py                 the model
   production_weights.csv    per-region production share and irrigation share
   yield_history.csv         observed detrended state yields, 1995-2024 (300 rows)
-  price_history.csv         national balance sheet and price, 1975-2026 (52 rows)
+  price_history.csv         national balance sheet, exports and price, 1975-2026 (52 rows)
   transmission.json         the committed fit, its selection trail and bootstrap
   *.meta.json               provenance for the three built tables
   build_weights.py          one-time weights build (not in the image)
@@ -320,10 +320,21 @@ corn-price/
   corn will do.
 - **No pip install layer.** Weighted sums, an empirical quantile and one
   coefficient. The standard library is enough.
+- **Export exposure is carried but never read.** `price_history.csv` holds
+  `exports_mil_bu` and `export_share_of_use` from the same ERS Table 4 as the
+  stocks series, and every run copies the current and latest-complete figures
+  into `metadata.export_exposure`. Nothing in the arithmetic touches them. They
+  exist so a downstream trade-policy model can size a lost-sales scenario
+  against this bundle's own vintage instead of re-sourcing the balance sheet.
+  **Exports are a component of total use, not an addition to it**, and the
+  transmission prices no trade scenario of any kind -- that is stated in
+  `not_captured`, in the output's `role` string and in the Modelfile `not_for`.
+  Brief 0002.
 
 ### Verified results (2026-09-20)
 
-- `check_price.py`: **73/73 checks pass** (63 before the Copilot review).
+- `check_price.py`: **95/95 checks pass** (63 before the Copilot review, 73
+  before brief 0002's export exposure).
 - **The 2012 drought, end to end:** feeding each state's actual 2012 rank
   reproduces a US yield shock of **-21.92%** against the actual national
   deviation of **-22.23%**. The case is dated 2012 as well as ranked 2012, so

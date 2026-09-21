@@ -133,6 +133,95 @@ def check_tables(weights, deviations, metas):
           not off, f"off: {off}" if off else f"{len(expected_years)} years x {len(years)} regions")
 
 
+# ------------------------------------------------- the export exposure (AC-1/5/6/7)
+
+def check_export_exposure(document, metas):
+    """The committed export series, its meta, and how the output labels it.
+
+    None of this feeds the price arithmetic. The checks exist because a bushel
+    figure printed beside a price impact invites exactly the inference this
+    bundle refuses to make, so the labelling is as much the subject here as the
+    numbers are.
+    """
+    print("\nAC-1/5  the committed export series")
+    with open(HERE / "price_history.csv", newline="") as fh:
+        price_rows = list(csv.DictReader(fh))
+
+    check("price_history.csv carries both export columns",
+          "exports_mil_bu" in price_rows[0] and "export_share_of_use" in price_rows[0])
+    populated = [r for r in price_rows if r["exports_mil_bu"] and r["export_share_of_use"]]
+    check("exports present for every marketing year in the window",
+          len(populated) == len(price_rows),
+          f"{len(populated)}/{len(price_rows)} rows")
+    check("exports are positive in every year",
+          all(float(r["exports_mil_bu"]) > 0 for r in populated))
+    # Exports are a disappearance COMPONENT of total use. If one ever equalled or
+    # exceeded the other, the column has been joined to the wrong series.
+    check("exports are strictly less than total use in every year",
+          all(float(r["exports_mil_bu"]) < float(r["total_use_mil_bu"]) for r in populated))
+    inconsistent = [
+        r["year"] for r in populated
+        if not close(float(r["export_share_of_use"]),
+                     float(r["exports_mil_bu"]) / float(r["total_use_mil_bu"]), 5e-7)
+    ]
+    check("the share equals exports over total use in every year",
+          not inconsistent, f"off: {inconsistent}" if inconsistent else "")
+    shares = [float(r["export_share_of_use"]) for r in populated]
+    check("the export share stays in a sane band for US corn",
+          all(0.03 <= s <= 0.45 for s in shares),
+          f"{min(shares):.1%} to {max(shares):.1%}")
+
+    meta = metas["price_history"]
+    exposure = meta.get("export_exposure", {})
+    check("price_history.meta.json records the export exposure",
+          set(exposure) >= {"current", "latest_complete"}, f"{sorted(exposure)}")
+    by_year = {int(r["year"]): r for r in price_rows}
+    for label in ("current", "latest_complete"):
+        block = exposure.get(label, {})
+        row = by_year.get(block.get("marketing_year"))
+        check(f"the {label} exposure matches its row in the table",
+              row is not None
+              and close(block["exports_mil_bu"], float(row["exports_mil_bu"]), 1e-6)
+              and close(block["export_share_of_use"],
+                        float(row["export_share_of_use"]), 1e-6),
+              f"marketing year {block.get('marketing_year')}")
+        check(f"the {label} exposure declares whether it is a projection",
+              isinstance(block.get("is_projection"), bool),
+              f"is_projection={block.get('is_projection')}")
+    check("the latest complete exposure is not a WASDE projection",
+          exposure.get("latest_complete", {}).get("is_projection") is False)
+    check("exports are defined as a component of total use",
+          "component of total use" in meta.get("definitions", {}).get("exports", ""))
+
+    print("\nAC-6/7  the exposure is labelled as context, not as a priced scenario")
+    carried = (document.get("metadata") or {}).get("export_exposure") or {}
+    check("the output metadata carries the export exposure",
+          set(carried) >= {"current", "latest_complete", "role"}, f"{sorted(carried)}")
+    for label in ("current", "latest_complete"):
+        check(f"the output's {label} exposure matches the committed meta",
+              carried.get(label) == exposure.get(label))
+    role = (carried.get("role") or "").lower()
+    check("the output says the exposure is context only", "context only" in role)
+    check("the output says exports are a component of total use, not an addition",
+          "component of total use" in role)
+    # The three-place rule: transmission.json (reaching the output document
+    # through assumptions.not_captured), the output's own role string, and the
+    # Modelfile must each say it. One of the three is not enough.
+    not_captured = " ".join(
+        (document.get("assumptions") or {}).get("not_captured", [])
+    ).lower()
+    check("the output's not_captured names export demand shocks",
+          "export demand" in not_captured)
+    check("the output's not_captured names trade policy",
+          "trade policy" in not_captured or "tariff" in not_captured)
+    check("the role string points at a path that exists in the document",
+          "assumptions.not_captured" in (carried.get("role") or "")
+          and "not_captured" in (document.get("assumptions") or {}))
+    not_for = MODELFILE.read_text().lower()
+    check("the Modelfile not_for names trade policy",
+          "trade polic" in not_for or "tariff" in not_for)
+
+
 # ------------------------------------------------------- the rescaling (AC-7/8)
 
 def check_rescaling(document, deviations):
@@ -509,6 +598,7 @@ def main(argv):
 
     print(f"checking {output_path}")
     check_tables(weights, deviations, metas)
+    check_export_exposure(document, metas)
     check_rescaling(document, deviations)
     check_aggregation(document)
     check_transmission(document, transmission, deviations)

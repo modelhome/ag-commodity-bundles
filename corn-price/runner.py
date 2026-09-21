@@ -483,6 +483,19 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
                         if defaults["reference_price_is_projection"] else "")
             ),
         },
+        # Exposure context for a downstream trade-policy model, carried so that
+        # model does not have to re-source the balance sheet or pick a different
+        # vintage. Nothing in this bundle's arithmetic reads it.
+        "export_exposure": {
+            "current": price_meta["export_exposure"]["current"],
+            "latest_complete": price_meta["export_exposure"]["latest_complete"],
+            "role": (
+                "context only. Exports are a component of total use, never an addition "
+                "to it. This model's transmission is fitted on supply-side weather "
+                "shocks and prices no trade scenario of any kind; see "
+                "assumptions.not_captured."
+            ),
+        },
         "carryin_stocks_to_use": {
             "value": defaults["carryin_stocks_to_use"],
             "marketing_year": defaults["carryin_stocks_to_use_year"],
