@@ -37,7 +37,13 @@ SAMPLE = HERE / "sample_input.json"
 RUNNER = HERE / "runner.py"
 MODELFILE = HERE / "Modelfile.toml"
 
-TEN = ["ia", "il", "mn", "ne", "in", "sd", "oh", "wi", "ks", "mo"]
+# Node 1's region set. Nebraska and Kansas are split into an irrigated and a
+# rainfed stratum because irrigation covers 20% or more of their harvested corn
+# acres; the other eight states are one region each.
+REGIONS = ["ia", "il", "mn", "ne_irrigated", "ne_rainfed", "in", "sd", "oh",
+           "wi", "ks_irrigated", "ks_rainfed", "mo"]
+SPLIT_STATES = {"NE": ("ne_irrigated", "ne_rainfed"),
+                "KS": ("ks_irrigated", "ks_rainfed")}
 
 PASSES = []
 FAILURES = []
@@ -48,6 +54,17 @@ def check(label, condition, detail=""):
     mark = "pass" if condition else "FAIL"
     print(f"  [{mark}] {label}" + (f" -- {detail}" if detail else ""))
     return condition
+
+
+def spread_of(values):
+    """p10-to-p90 spread of a deviation series, the runner's own quantile."""
+    values = sorted(values)
+    def q(fraction):
+        position = fraction * (len(values) - 1)
+        low = int(position // 1)
+        high = min(low + 1, len(values) - 1)
+        return values[low] * (1 - (position - low)) + values[high] * (position - low)
+    return q(0.9) - q(0.1)
 
 
 def close(a, b, tolerance):
@@ -87,10 +104,14 @@ def load_tables():
 
 def check_tables(weights, deviations, metas):
     print("\nAC-5  production weights and coverage")
-    check("all ten region keys in production_weights.csv",
-          sorted(weights) == sorted(TEN), f"{sorted(weights)}")
-    check("all ten region keys in yield_history.csv",
-          sorted(deviations) == sorted(TEN))
+    check("all twelve region keys in production_weights.csv",
+          sorted(weights) == sorted(REGIONS), f"{sorted(weights)}")
+    check("all twelve region keys in yield_history.csv",
+          sorted(deviations) == sorted(REGIONS))
+    check("every region declares a stratum",
+          all(r.get("stratum") in ("all", "irrigated", "rainfed")
+              for r in weights.values()),
+          f"{ {k: r.get('stratum') for k, r in weights.items()} }")
     check("thirty observed years per region",
           all(len(v) == 30 for v in deviations.values()),
           f"{ {k: len(v) for k, v in deviations.items()} }")
@@ -100,7 +121,7 @@ def check_tables(weights, deviations, metas):
     check("coverage share equals the sum of the per-state shares",
           close(recomputed, meta["coverage_share_of_us"], 1e-5),
           f"{recomputed:.6f} vs {meta['coverage_share_of_us']:.6f}")
-    check("coverage share is in a sane band for ten corn states",
+    check("coverage share is in a sane band for these corn states",
           0.75 <= recomputed <= 0.90, f"{recomputed * 100:.2f}% of US production")
     # Each share must be that state's production over the national total the
     # build script recorded, or the shares are not what they claim to be.
@@ -114,9 +135,41 @@ def check_tables(weights, deviations, metas):
     check("irrigated share present for every region",
           all(r["irrigated_share"] != "" for r in weights.values()))
     irrigated = {k: float(r["irrigated_share"]) for k, r in weights.items()}
-    check("Nebraska and Kansas are the most irrigated states in the set",
-          sorted(irrigated, key=irrigated.get, reverse=True)[:2] == ["ne", "ks"],
-          f"ne {irrigated['ne']:.1%}, ks {irrigated['ks']:.1%}")
+    # A stratum is defined by its irrigation, so its share is 1 or 0 by
+    # construction. An unsplit state's is measured, and must be below node 1's
+    # 20% split threshold -- otherwise node 1 would have split it.
+    strata = {k: r["stratum"] for k, r in weights.items()}
+    check("each stratum's irrigated share is 1 or 0 by construction",
+          all(irrigated[k] == 1.0 for k, s in strata.items() if s == "irrigated")
+          and all(irrigated[k] == 0.0 for k, s in strata.items() if s == "rainfed"))
+    state_share = {k: float(r["state_irrigated_share"]) for k, r in weights.items()
+                   if r.get("state_irrigated_share")}
+    check("every row carries the whole state's irrigated share",
+          sorted(state_share) == sorted(weights))
+    check("an unsplit region's own share is its state's",
+          all(close(state_share[k], irrigated[k], 1e-9)
+              for k, s in strata.items() if s == "all"))
+    for state, (irr, rain) in SPLIT_STATES.items():
+        check(f"{state}'s two strata report the same state irrigated share",
+              close(state_share[irr], state_share[rain], 1e-9),
+              f"{state_share[irr]:.4f}")
+        check(f"{state} is at or above node 1's 20% split threshold",
+              state_share[irr] >= 0.20, f"{state_share[irr]:.1%}")
+    check("every unsplit state is below node 1's 20% split threshold",
+          all(state_share[k] < 0.20 for k, s in strata.items() if s == "all"),
+          ", ".join(f"{k} {irrigated[k]:.1%}"
+                    for k in sorted(strata, key=irrigated.get, reverse=True)
+                    if strata[k] == "all")[:80])
+
+    # Splitting a state must move acres and production between two rows, never
+    # create or destroy any: the coverage share is the same before and after.
+    for state, (irr, rain) in SPLIT_STATES.items():
+        acres = sum(float(weights[k]["acres_harvested"]) for k in (irr, rain))
+        # The published 2022 Census state totals, written here rather than read
+        # from the file under test so this is an independent assertion.
+        published = {"NE": 8648207.0, "KS": 4658341.0}[state]
+        check(f"{state}'s two strata sum to its published harvested acres",
+              close(acres, published, 1e-6), f"{acres:.0f} vs {published:.0f}")
 
     yield_meta = metas["yield_history"]
     check("observed window is node 2's 1995-2024",
@@ -134,6 +187,152 @@ def check_tables(weights, deviations, metas):
 
 
 # ------------------------------------------------- the export exposure (AC-1/5/6/7)
+
+def check_stratum_rescaling(document, weights, deviations, metas):
+    """The stratum distributions are the state's, rescaled by a measured ratio.
+
+    This is the transformation brief 0003 added, and the one a reader is most
+    entitled to be sceptical of, so it is checked against the committed table
+    rather than taken from the meta file's word.
+    """
+    print("\nAC-4  stratum distributions are rescaled state distributions")
+    yield_meta = metas["yield_history"]
+    rescaling = yield_meta.get("stratum_rescaling") or {}
+    strata = {k: r["stratum"] for k, r in weights.items()}
+    split_keys = sorted(k for k, s in strata.items() if s != "all")
+
+    check("every stratum has a recorded rescaling",
+          sorted(rescaling) == split_keys, f"{sorted(rescaling)} vs {split_keys}")
+    check("no unsplit region was rescaled",
+          not any(strata.get(k) == "all" for k in rescaling))
+
+    for key in split_keys:
+        detail = rescaling.get(key)
+        if not detail:
+            continue
+        ratio = detail["dispersion_ratio"]
+        # The direction is the whole point: irrigation damps year-to-year yield
+        # variation, so an irrigated stratum must come out NARROWER than its
+        # state and a rainfed one WIDER. A ratio on the wrong side of 1 would
+        # mean the rescaling is inflating exactly what it exists to damp.
+        if strata[key] == "irrigated":
+            check(f"{key}: irrigated stratum is narrower than its state",
+                  0 < ratio < 1, f"x{ratio:.3f}")
+        else:
+            check(f"{key}: rainfed stratum is wider than its state",
+                  ratio > 1, f"x{ratio:.3f}")
+        check(f"{key}: the ratio was measured on enough years",
+              detail["ratio_years"] >= 15, f"{detail['ratio_years']} years "
+                                           f"({detail['ratio_period']})")
+        check(f"{key}: the ratio's series is pinned to a harvested-acre yield",
+              detail["series"].endswith("MEASURED IN BU / ACRE"), detail["series"])
+
+    # Splitting a state must not change how much say it has in the national
+    # figure. The invariant is checked in the weights the RUNNER actually used
+    # -- production_weight in the output, which is acres times each region's
+    # fitted trend yield at the run's year -- and not in the census production
+    # shares the table happens to be built on. Those two bases differ, and the
+    # gap widens with the run year, so a check on the wrong basis would pass
+    # while the model was not weight-neutral.
+    out_regions = {r["region_key"]: r for r in document["regions"]}
+    for state, (irr, rain) in SPLIT_STATES.items():
+        if not all(k in out_regions for k in (irr, rain)):
+            continue
+        members = [out_regions[k] for k in (irr, rain)]
+        if not all("stratum_dispersion_ratio_measured" in r for r in members):
+            check(f"{state}: stratum rows carry the measured ratio", False)
+            continue
+        total = sum(r["production_weight"] for r in members)
+        mean = sum(r["production_weight"] / total
+                   * r["stratum_dispersion_ratio"] for r in members)
+        check(f"{state}: splitting it does not change its weight in the national figure",
+              close(mean, 1.0, 1e-3),
+              f"weighted mean of applied ratios = {mean:.4f}, in the runner's own weights")
+        measured_mean = sum(r["production_weight"] / total
+                            * r["stratum_dispersion_ratio_measured"] for r in members)
+        check(f"{state}: the raw measured ratios would NOT have been weight-neutral",
+              not close(measured_mean, 1.0, 1e-2),
+              f"they average {measured_mean:.4f}; this is what the normalisation removes")
+        got = (members[0]["stratum_dispersion_ratio"]
+               / members[1]["stratum_dispersion_ratio"])
+        want = (members[0]["stratum_dispersion_ratio_measured"]
+                / members[1]["stratum_dispersion_ratio_measured"])
+        check(f"{state}: normalisation preserves the measured irrigated:rainfed proportion",
+              close(got, want, 1e-3), f"{got:.4f} vs measured {want:.4f}")
+        check(f"{state}: the divisor is reported on the row",
+              all(close(r["stratum_normalisation_divisor"],
+                        r["stratum_dispersion_ratio_measured"]
+                        / r["stratum_dispersion_ratio"], 1e-3) for r in members))
+
+    # Both of a state's strata are the SAME state series scaled by their own
+    # ratio, so the ratio of their committed spreads must equal the ratio of
+    # their recorded factors, exactly. That is a property the committed table
+    # and the meta file must share, and it catches a table rebuilt with one and
+    # a meta file left describing the other.
+    for state, (irr, rain) in SPLIT_STATES.items():
+        if not (irr in deviations and rain in deviations):
+            continue
+        irr_spread = spread_of(deviations[irr])
+        rain_spread = spread_of(deviations[rain])
+        check(f"{state}: the irrigated stratum's observed spread is the narrower",
+              irr_spread < rain_spread,
+              f"{irr} {irr_spread:.1f} pts vs {rain} {rain_spread:.1f} pts")
+        if irr in rescaling and rain in rescaling:
+            committed = irr_spread / rain_spread
+            recorded = (rescaling[irr]["dispersion_ratio"]
+                        / rescaling[rain]["dispersion_ratio"])
+            check(f"{state}: the committed spreads match the recorded ratios",
+                  close(committed, recorded, 1e-3),
+                  f"{committed:.4f} vs {recorded:.4f}")
+
+    # The rescaling must be declared in the output document itself, not only in
+    # a build artifact a reader of the output never sees.
+    assumptions = document.get("assumptions") or {}
+    check("the output states the stratum rescaling",
+          "stratum_rescaling" in assumptions
+          and "end in 2018" in assumptions["stratum_rescaling"])
+    check("the output names what the rescaling assumes",
+          "assumes" in (assumptions.get("stratum_rescaling") or "").lower())
+    not_captured = " ".join(assumptions.get("not_captured") or [])
+    check("the output says irrigation supply is unconstrained upstream",
+          "aquifer" in not_captured
+          and "upper bound" in (assumptions.get("irrigation") or "").lower())
+
+    regions = document["regions"]
+    tables = (document.get("metadata") or {}).get("tables") or {}
+    pw = tables.get("production_weights") or {}
+    check("the full-set coverage key is region-neutral, not named for ten states",
+          "coverage_share_of_us_all_regions" in pw
+          and "coverage_share_of_us_all_ten" not in pw)
+
+    check("every region row declares its stratum",
+          all(r.get("stratum") in ("all", "irrigated", "rainfed") for r in regions))
+    rescaled_rows = [r for r in regions if r.get("stratum") != "all"]
+    check("each stratum row carries its own dispersion ratio",
+          all("stratum_dispersion_ratio" in r for r in rescaled_rows),
+          f"{len(rescaled_rows)} stratum rows")
+    check("unsplit rows carry no rescaling factor",
+          all("stratum_dispersion_ratio" not in r
+              for r in regions if r.get("stratum") == "all"))
+
+
+def check_no_stratum_inference():
+    """No code may infer a region's stratum from the spelling of its key.
+
+    Node 2 asserts the same thing about its water regime. A key named
+    "ne_irrigated" is irrigated because production_weights.csv says so; if the
+    runner ever pattern-matched the suffix instead, a renamed key would silently
+    change the model rather than failing loudly.
+    """
+    print("\nAC-4  the stratum is declared, never inferred from the key")
+    source = RUNNER.read_text()
+    for pattern in ('"_irrigated"', "'_irrigated'", '"_rainfed"', "'_rainfed'",
+                    'endswith("_irr', "endswith('_irr", 'startswith("ne_',
+                    "startswith('ne_"):
+        check(f"runner.py does not match on {pattern}", pattern not in source)
+    check("runner.py reads the stratum from the weights table",
+          'row["stratum"]' in source)
+
 
 def check_export_exposure(document, metas):
     """The committed export series, its meta, and how the output labels it.
@@ -273,10 +472,17 @@ def check_rescaling(document, deviations):
     print("\nAC-8  the rainfed bias is handled and visible")
     check("irrigated share ships per region",
           all(r.get("irrigated_share") is not None for r in regions))
-    check("the two most over-dispersed regions are the two most irrigated",
-          set(sorted(ratios, key=ratios.get, reverse=True)[:2]) == {"ne", "ks"},
-          ", ".join(f"{k} x{ratios[k]:.1f}"
-                    for k in sorted(ratios, key=ratios.get, reverse=True)[:3]))
+    # Node 2 now irrigates the irrigated strata rather than simulating them as
+    # dryland, and this model reads each stratum against its own distribution,
+    # so within each split state the irrigated stratum must be the LESS
+    # over-dispersed of the two. Irrigation damps the simulation and the
+    # observation alike; if it did not, the rescaling would be facing the wrong
+    # way round.
+    for state, (irr, rain) in SPLIT_STATES.items():
+        if irr in ratios and rain in ratios:
+            check(f"{state}'s irrigated stratum is less over-dispersed than its rainfed one",
+                  ratios[irr] < ratios[rain],
+                  f"{irr} x{ratios[irr]:.2f} vs {rain} x{ratios[rain]:.2f}")
     check("node 2's own percentage still ships, for comparison",
           all("yield_anomaly_simulated_pct" in r for r in regions))
 
@@ -337,7 +543,7 @@ def check_aggregation(document):
 
 # --------------------------------------------------- the transmission (AC-9)
 
-def check_transmission(document, transmission, deviations):
+def check_transmission(document, transmission, deviations, metas):
     print("\nAC-9  the price response is cited, signed correctly and always ranged")
     national = document["national"]
 
@@ -399,6 +605,23 @@ def check_transmission(document, transmission, deviations):
         history = list(csv.DictReader(fh))
     dev_2012 = {r["region_key"]: float(r["deviation_pct"])
                 for r in history if r["year"] == "2012"}
+    # For the four strata, yield_history.csv holds the state series rescaled --
+    # a reconstruction, not an observation. Ranking against it would test the
+    # reconstruction against itself. The build records the PUBLISHED per-stratum
+    # deviations it measured the ratio from, so the strata are ranked against
+    # those instead and this is a real historical case for all twelve regions.
+    rescaling = metas["yield_history"].get("stratum_rescaling") or {}
+    observed_rank = {}
+    for key, detail in rescaling.items():
+        series = detail.get("observed_deviation_pct") or {}
+        if "2012" not in series:
+            continue
+        values = sorted(series.values())
+        observed_rank[key] = (100.0 * sum(1 for v in values if v < series["2012"])
+                              / len(values))
+    check("the four strata are ranked on PUBLISHED 2012 observations, not the "
+          "rescaled series", len(observed_rank) == 4,
+          ", ".join(f"{k} p{observed_rank[k]:.0f}" for k in sorted(observed_rank)))
     # The dates matter as much as the ranks: production weights are acres times
     # the TREND yield for the snapshot's year, so leaving the sample's 2026 dates
     # in place would weight a 2012 episode with 2026 trend yields and the check
@@ -407,8 +630,11 @@ def check_transmission(document, transmission, deviations):
     snapshot["metadata"]["date"] = "2012-09-20"
     for row in snapshot["rows"]:
         key = row["region_key"]
-        series = deviations[key]
-        rank = 100.0 * sum(1 for v in series if v < dev_2012[key]) / len(series)
+        if key in observed_rank:
+            rank = observed_rank[key]
+        else:
+            series = deviations[key]
+            rank = 100.0 * sum(1 for v in series if v < dev_2012[key]) / len(series)
         row["yield_percentile_rank"] = rank
         row["date"] = "2012-09-20"
     with tempfile.TemporaryDirectory() as tmp:
@@ -465,16 +691,47 @@ def check_loud_failures():
           "1991-2020" in stderr and "1995-2024" in stderr)
     check("no traceback on the window mismatch", "Traceback" not in stderr)
 
+    # A snapshot whose water regime disagrees with this model's stratum would
+    # map a rank onto a distribution of roughly half or twice the right width.
+    # Doctored both ways: an irrigated stratum simulated rainfed, and an
+    # unsplit state simulated irrigated.
+    for label, key, regime in (("an irrigated stratum simulated rainfed",
+                                "ne_irrigated", "rainfed"),
+                               ("an unsplit state simulated irrigated", "ia",
+                                "irrigated")):
+        snapshot = json.loads(SAMPLE.read_text())
+        snapshot["metadata"]["baselines"]["regions"][key]["regime"] = regime
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "regime.json"
+            path.write_text(json.dumps(snapshot))
+            code, _, stderr = run_model(path)
+        check(f"{label} exits non-zero", code == 1, f"exit {code}")
+        check(f"the message names {key} and both regimes",
+              key in stderr and regime in stderr)
+        check(f"no traceback on the {key} regime mismatch", "Traceback" not in stderr)
+
+    # An absent regime is a mismatch, not an assumption of rainfed.
+    snapshot = json.loads(SAMPLE.read_text())
+    del snapshot["metadata"]["baselines"]["regions"]["ks_irrigated"]["regime"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "noregime.json"
+        path.write_text(json.dumps(snapshot))
+        code, _, stderr = run_model(path)
+    check("a missing upstream regime exits non-zero rather than being assumed",
+          code == 1, f"exit {code}")
+    check("the message says the regime was absent", "absent" in stderr)
+
     # A subset of regions must still run, and must report the subset's coverage.
     snapshot = json.loads(SAMPLE.read_text())
-    snapshot["rows"] = [r for r in snapshot["rows"] if r["region_key"] in ("ia", "ne")]
+    snapshot["rows"] = [r for r in snapshot["rows"]
+                        if r["region_key"] in ("ia", "ne_irrigated")]
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "subset.json"
         path.write_text(json.dumps(snapshot))
         code, subset, _ = run_model(path)
     check("a two-region subset still runs", code == 0)
     if subset:
-        check("the subset reports its own coverage, not the full ten states'",
+        check("the subset reports its own coverage, not the full set's",
               0.2 < subset["national"]["coverage_share_of_us_production"] < 0.35,
               f"{subset['national']['coverage_share_of_us_production'] * 100:.1f}%")
 
@@ -598,10 +855,12 @@ def main(argv):
 
     print(f"checking {output_path}")
     check_tables(weights, deviations, metas)
+    check_stratum_rescaling(document, weights, deviations, metas)
+    check_no_stratum_inference()
     check_export_exposure(document, metas)
     check_rescaling(document, deviations)
     check_aggregation(document)
-    check_transmission(document, transmission, deviations)
+    check_transmission(document, transmission, deviations, metas)
     check_loud_failures()
     check_contract(document)
     check_annotations(document)

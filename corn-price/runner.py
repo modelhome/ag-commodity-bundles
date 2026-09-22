@@ -81,16 +81,32 @@ def load_weights():
     """{region_key: {...}} from production_weights.csv."""
     with open(WEIGHTS_PATH, newline="") as fh:
         rows = list(csv.DictReader(fh))
+    if rows and "stratum" not in rows[0]:
+        raise RunError(
+            f"{WEIGHTS_PATH.name} has no stratum column; rebuild it with the current "
+            f"build_weights.py. A region's stratum is declared there, never inferred "
+            f"from the spelling of its key."
+        )
     out = {}
     for row in rows:
         out[row["region_key"]] = {
             "state": row["state"],
+            # "all", "irrigated" or "rainfed". Node 1 splits a state when
+            # irrigation covers 20% or more of its harvested corn acres.
+            "stratum": row["stratum"],
             "production_bu": float(row["production_bu"]),
             "acres_harvested": float(row["acres_harvested"]),
             # Blank means NASS withheld the figure for disclosure. It is carried
             # through as None, never read as "this state does not irrigate".
             "irrigated_share": (
                 float(row["irrigated_share"]) if row["irrigated_share"] else None
+            ),
+            # The whole state's irrigated share, on every row including the
+            # strata, so the figure stays comparable across split and unsplit
+            # regions. It is what node 1's 20% split threshold is applied to.
+            "state_irrigated_share": (
+                float(row["state_irrigated_share"])
+                if row.get("state_irrigated_share") else None
             ),
             "production_share_of_us": float(row["production_share_of_us"]),
         }
@@ -220,6 +236,89 @@ def check_periods(node2_metadata, yield_meta):
     return local_period, upstream_period
 
 
+def normalise_ratios(ratios, weights, state):
+    """Divide a split state's stratum ratios by their own weighted mean.
+
+    Why any normalisation is needed. The raw ratios are each measured against
+    the state MARGINALLY: the irrigated series' spread over the state's, and
+    the rainfed series' over the state's. Used as measured they do not
+    recombine to the state -- weighted, they average 1.086 for Nebraska and
+    1.394 for Kansas, not 1 -- so splitting a state would silently hand it that
+    much more influence over the national shock than treating it as one region
+    did. Marginal spreads add linearly only when the two series move together,
+    and over the published years they correlate 0.31 in Nebraska and 0.80 in
+    Kansas. The real state series already embeds that diversification and is
+    narrower than the sum of its parts; a shared-shape reconstruction
+    overshoots.
+
+    Why the RUNNER does this and not this build script. The weights that decide
+    how much a region contributes are the runner's: acres times that region's
+    fitted trend yield, evaluated at the run's year. They are not the census
+    production shares, and because the two strata have their own trend slopes
+    the gap between the two bases WIDENS with the year -- normalising on
+    production shares left Nebraska 3.3% over-weighted in 2024 and 5.1% in
+    2040. A build-time divisor is therefore exact for no run at all. The runner
+    computes the divisor from the weights it is about to use, so the identity
+    holds exactly at every run year.
+
+    The measured irrigated-to-rainfed proportion is untouched by this: dividing
+    both by a common number leaves their ratio exactly as the data set it. What
+    it does change is that a stratum's spread is no longer its own measured
+    marginal spread, which is why the measurement ships beside it as
+    dispersion_ratio_measured.
+    """
+    total = sum(weights.values())
+    if total <= 0:
+        raise RunError(f"{state}: stratum weights sum to {total}")
+    mean = sum(weights[k] / total * ratios[k] for k in ratios)
+    if mean <= 0:
+        raise RunError(f"{state}: stratum ratios average to {mean}; cannot normalise")
+    return {k: v / mean for k, v in ratios.items()}, mean
+
+
+def check_baseline_regimes(node2_metadata, weights, keys):
+    """Node 2's water regime per region must match this model's stratum for it.
+
+    The stratum decides which observed distribution a rank is mapped onto, and
+    an irrigated stratum's distribution is roughly half the width of a rainfed
+    one. So a snapshot whose `ne_irrigated` was actually simulated rainfed --
+    a stale document, or a node 2 built before the split -- would have its rank
+    read against the wrong distribution and produce a confidently wrong number
+    with nothing visibly amiss.
+
+    Node 2 publishes the regime it used per region in its baselines metadata,
+    so this is checkable rather than assumed. Checked once, before any
+    weighting, and a mismatch is a failed run rather than a wrong answer. A
+    region that declares no regime at all is treated as a mismatch, not assumed
+    rainfed, for the same reason node 2 refuses that case.
+    """
+    regions = (node2_metadata.get("baselines") or {}).get("regions") or {}
+    expected = {"all": "rainfed", "rainfed": "rainfed", "irrigated": "irrigated"}
+    problems = []
+    for key in keys:
+        stratum = weights[key]["stratum"]
+        want = expected.get(stratum)
+        if want is None:
+            raise RunError(
+                f"{key}: production_weights.csv declares stratum {stratum!r}, which this "
+                f"runner has no expected upstream water regime for."
+            )
+        got = (regions.get(key) or {}).get("regime")
+        if got != want:
+            problems.append(f"{key}: this model expects {want!r}, the snapshot says "
+                            f"{got!r}" + (" (absent)" if got is None else ""))
+    if problems:
+        raise RunError(
+            "water regime mismatch between the upstream snapshot and this model's "
+            "strata:\n  " + "\n  ".join(problems) +
+            "\nThe stratum chooses which observed distribution a percentile rank is "
+            "mapped onto, and an irrigated distribution is about half the width of a "
+            "rainfed one, so a mismatch is a silently wrong answer rather than a rough "
+            "one. Run against a snapshot from a node 2 that simulates these regions the "
+            "way production_weights.csv says they are farmed."
+        )
+
+
 # ------------------------------------------------------------------- the model
 
 def process(snapshot, weights, deviations, observed_years, yield_meta, price_meta,
@@ -238,6 +337,10 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
     year = int(str(date)[:4])
 
     trends = yield_meta["trends"]
+    stratum_ratios = {
+        key: detail["dispersion_ratio"]
+        for key, detail in (yield_meta.get("stratum_rescaling") or {}).items()
+    }
 
     regions = []
     for row in rows:
@@ -285,6 +388,7 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
         regions.append({
             "region_key": key,
             "state": row.get("state") or info["state"],
+            "stratum": info["stratum"],
             "date": row.get("date") or date,
             "yield_percentile_rank": rank,
             "yield_anomaly_simulated_pct": simulated_pct,
@@ -294,6 +398,7 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
             # for the mapping, and check_price.py asserts it.
             "dispersion_ratio": None if ratio is None else round(ratio, 2),
             "irrigated_share": info["irrigated_share"],
+            "state_irrigated_share": info["state_irrigated_share"],
             "acres_harvested": info["acres_harvested"],
             "trend_yield_bu_acre": round(region_trend_yield, 2),
             "production_share_of_us": info["production_share_of_us"],
@@ -304,10 +409,48 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
         # absent legitimately: irrigated_share when NASS withheld the figure for
         # disclosure, and dispersion_ratio when the upstream document carries no
         # baseline quantiles for the region.
-        for optional in ("irrigated_share", "dispersion_ratio",
-                         "yield_anomaly_simulated_pct"):
+        for optional in ("irrigated_share", "state_irrigated_share",
+                         "dispersion_ratio", "yield_anomaly_simulated_pct"):
             if regions[-1].get(optional) is None:
                 del regions[-1][optional]
+
+    # Every key is known to have a table row by here, so this reports every
+    # regime mismatch at once rather than only the first.
+    check_baseline_regimes(metadata, weights, [r["region_key"] for r in regions])
+
+    # Normalise each split state's stratum ratios against the weights this run
+    # is actually about to use, then rescale that state's mapped anomalies by
+    # the same divisor. Doing it here rather than in the committed table is what
+    # makes the identity exact: the weights are acres times each region's fitted
+    # trend yield at THIS year, and because the two strata have their own trend
+    # slopes that basis drifts away from the census production shares the table
+    # is built on. See normalise_ratios.
+    strata_by_state = {}
+    for region in regions:
+        if region["stratum"] != "all":
+            strata_by_state.setdefault(region["state"], []).append(region)
+    for state, members in strata_by_state.items():
+        ratios = {r["region_key"]: stratum_ratios[r["region_key"]] for r in members}
+        if len(ratios) != len(members) or not ratios:
+            raise RunError(
+                f"{state}: a stratum row has no recorded dispersion ratio in "
+                f"{YIELD_HISTORY_META_PATH.name}; rebuild the yield history."
+            )
+        weights_here = {r["region_key"]: r["_weight_raw"] for r in members}
+        normalised, divisor = normalise_ratios(ratios, weights_here, state)
+        for region in members:
+            key = region["region_key"]
+            # The committed series is the state's scaled by the MEASURED ratio,
+            # so dividing the mapped anomaly by the divisor is exactly the same
+            # as having scaled the distribution by ratio/divisor: the quantile
+            # map is linear in the distribution's scale.
+            region["yield_anomaly_real_pct"] = round(
+                region["yield_anomaly_real_pct"] / divisor, 4
+            )
+            region["stratum_dispersion_ratio"] = round(normalised[key], 4)
+            region["stratum_dispersion_ratio_measured"] = round(ratios[key], 4)
+            region["stratum_normalisation_divisor"] = round(divisor, 4)
+        log(f"{state}: strata normalised by {divisor:.4f} on this run's weights")
 
     total_weight = sum(r["_weight_raw"] for r in regions)
     if total_weight <= 0:
@@ -401,9 +544,15 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
         ),
         "weighting": (
             "Relative anomalies are combined with production weights: harvested acres "
-            "(2022 Census) times the state's fitted trend yield for this calendar year. "
-            "Actual 2022 production is not used as the weight because it embeds 2022's own "
-            "drought in the western states."
+            "(2022 Census) times THAT REGION's own fitted trend yield for this calendar "
+            "year. The two parts of a split state carry their own acres and their own "
+            "trend level and are weighted separately, so an irrigated stratum is weighted "
+            "at the yield irrigated corn actually reaches. Actual 2022 production is not "
+            "used as the weight because it embeds 2022's own drought in the western "
+            "states. Because these weights move with the run's year while the committed "
+            "stratum ratios were measured once, a split state's ratios are normalised "
+            "against these weights at run time rather than in the table -- see "
+            "stratum_rescaling and stratum_normalisation_divisor."
         ),
         "coverage": (
             f"The regions present are {round(coverage * 100, 2)}% of US corn-for-grain "
@@ -416,18 +565,50 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
             f"{period} series, evaluated at {year}."
         ),
         "irrigation": (
-            "Node 2 simulates every region as rainfed. Quantile mapping absorbs most of the "
-            "resulting bias, because a state's observed distribution already contains its "
-            "irrigated acres; irrigated_share ships per region so the exposure is visible. "
-            "It does not remove the bias: a rainfed simulation can rank an irrigated state's "
-            "dry year too low, and the mapping carries that rank faithfully."
+            "Node 1 splits a state into an irrigated and a rainfed stratum when irrigation "
+            "covers 20% or more of its harvested corn acres (Nebraska 52.7%, Kansas 25.4%), "
+            "and node 2 simulates the irrigated strata with soil-moisture-triggered "
+            "irrigation rather than as dryland. Each stratum carries its own production "
+            "weight, its own trend yield level and its own observed distribution here, so "
+            "an irrigated stratum's rank is no longer read against its state's blended "
+            "spread. Node 2 models irrigation supply as unconstrained -- no aquifer "
+            "decline, no allocation limit, no pumping ceiling in extreme heat -- so an "
+            "irrigated stratum's drought protection is an UPPER BOUND. This model's "
+            "observed distributions come from realised NASS yields and already embed "
+            "whatever supply limits were real, so the scale is not inflated by that "
+            "assumption; what it cannot correct is a rank set too high upstream in a "
+            "severely water-short year."
+        ),
+        "stratum_rescaling": (
+            "NASS publishes a state-level annual irrigated and non-irrigated corn yield "
+            "for the split states, but both series end in 2018, so no per-stratum history "
+            "covers this window. A stratum's observed distribution is therefore its "
+            f"state's {period} detrended series rescaled in spread by the stratum-to-state "
+            "dispersion ratio measured over the overlapping years, with the stratum's own "
+            "fitted trend supplying its yield level. Measured ratios and their windows "
+            "ship in metadata.tables.yield_history.stratum_rescaling, and each region's "
+            "own factor is on its row. This ASSUMES the measured ratio holds over the "
+            "unpublished years and that a stratum's year-to-year shape is its state's; the "
+            "second is the stronger claim, because in a year when irrigation is the whole "
+            "story the two strata do not move together at all. Unsplit regions are "
+            "untouched (ratio 1)."
         ),
         "transmission": transmission["specification"],
         "transmission_reported_effect": transmission["reported_effect"],
         "transmission_selection": transmission["selection_rule"],
         "stocks_to_use_finding": transmission["stocks_to_use_finding"],
         "interval_definition": transmission["interval_definition"],
-        "not_captured": transmission["not_captured"],
+        "not_captured": transmission["not_captured"] + [
+            "a split state's within-season divergence between its irrigated and rainfed "
+            "strata. Each stratum's observed distribution is its state's series rescaled "
+            "in width, so the two strata share one year-to-year shape. In a season when "
+            "irrigation is the whole story they do not move together, and this model "
+            "carries that error rather than detecting it",
+            "any limit on irrigation supply. Node 2 irrigates whenever soil moisture "
+            "falls to its trigger, with no aquifer decline, allocation limit or pumping "
+            "ceiling, so an irrigated stratum's rank in a severe drought may be set too "
+            "high upstream. Nothing here can detect that from a rank alone",
+        ],
     }
 
     meta = {
@@ -455,7 +636,7 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
                 "source": weights_meta["source"],
                 "source_last_modified": weights_meta["source_last_modified"],
                 "built_at": weights_meta["built_at"],
-                "coverage_share_of_us_all_ten": weights_meta["coverage_share_of_us"],
+                "coverage_share_of_us_all_regions": weights_meta["coverage_share_of_us"],
             },
             "yield_history": {
                 "vintage": yield_meta["vintage"],
@@ -463,6 +644,12 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
                 "source_last_modified": yield_meta["source_last_modified"],
                 "period": yield_meta["period"],
                 "built_at": yield_meta["built_at"],
+                # Per-stratum: the measured dispersion ratio, the years it was
+                # measured over and the NASS series it came from, so a reader can
+                # see how the stratum distributions were derived and how old the
+                # measurement is.
+                "stratum_rescaling": yield_meta.get("stratum_rescaling") or {},
+                "stratum_rescaling_method": yield_meta.get("stratum_rescaling_method"),
             },
             "price_history": {
                 "vintage": price_meta["vintage"],
@@ -521,10 +708,10 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
 # -------------------------------------------------------------------- plumbing
 
 REGION_COLUMNS = [
-    "region_key", "state", "date",
+    "region_key", "state", "stratum", "date",
     "yield_percentile_rank", "yield_anomaly_simulated_pct", "yield_anomaly_real_pct",
     "dispersion_ratio", "production_weight", "contribution_pct",
-    "production_share_of_us", "irrigated_share",
+    "production_share_of_us", "irrigated_share", "state_irrigated_share",
     "acres_harvested", "trend_yield_bu_acre",
 ]
 

@@ -73,6 +73,29 @@ PERIOD_END = 2024
 WEIGHTS_PATH = HERE / "production_weights.csv"
 
 SHORT_DESC = "CORN, GRAIN - YIELD, MEASURED IN BU / ACRE"
+
+# The per-stratum counterparts of SHORT_DESC, used only for the split states.
+# Same source and selector, different PRODN_PRACTICE_DESC.
+#
+# Pinned through the full SHORT_DESC, as SHORT_DESC above is, because NASS also
+# publishes each of these "MEASURED IN BU / NET PLANTED ACRE" -- a different
+# denominator that would silently mix a planted-acre yield into a
+# harvested-acre series.
+#
+# These series do NOT cover the window. For NE and KS both of them run
+# 1995-2018 and then stop: NASS discontinued the estimate, so 2019-2024 are
+# absent, including the 2022 western drought. They therefore cannot BE the
+# stratum's history -- they are used to measure how much wider or narrower a
+# stratum's year-to-year variation is than its state's, and that ratio is then
+# applied to the state's full-window series. See rescale_to_stratum.
+STRATUM_SHORT_DESC = {
+    "irrigated": "CORN, GRAIN, IRRIGATED - YIELD, MEASURED IN BU / ACRE",
+    "rainfed": "CORN, GRAIN, NON-IRRIGATED - YIELD, MEASURED IN BU / ACRE",
+}
+
+# A ratio measured on a handful of years would be noise. NE and KS both have 24.
+MIN_RATIO_YEARS = 15
+
 SUPPRESSED = {"(D)", "(Z)", "(NA)", "(X)", "(S)", ""}
 
 
@@ -81,18 +104,36 @@ def log(message):
 
 
 def load_regions():
-    """{region_key: STATE} from the already-built production_weights.csv."""
+    """({region_key: STATE}, {region_key: stratum}, {region_key: share}) from weights."""
     if not WEIGHTS_PATH.exists():
         raise SystemExit(
             f"{WEIGHTS_PATH.name} is missing. It defines the region set this table is "
             f"built for, so run build_weights.py first."
         )
     with open(WEIGHTS_PATH, newline="") as fh:
-        regions = {r["region_key"]: r["state"] for r in csv.DictReader(fh)}
-    if not regions:
+        rows = list(csv.DictReader(fh))
+    if not rows:
         raise SystemExit(f"{WEIGHTS_PATH.name} has no rows")
-    log(f"regions: {len(regions)} read from {WEIGHTS_PATH.name}")
-    return regions
+    if "stratum" not in rows[0]:
+        raise SystemExit(
+            f"{WEIGHTS_PATH.name} has no stratum column. Rebuild it with the current "
+            f"build_weights.py; the stratum is declared there, never inferred from the "
+            f"spelling of a region key."
+        )
+    regions = {r["region_key"]: r["state"] for r in rows}
+    strata = {r["region_key"]: r["stratum"] for r in rows}
+    # Production shares, used to normalise a split state's stratum ratios so
+    # they recombine to the state's own swing. See normalise_ratios.
+    shares = {r["region_key"]: float(r["production_share_of_us"]) for r in rows}
+    unknown = sorted(set(strata.values()) - {"all"} - set(STRATUM_SHORT_DESC))
+    if unknown:
+        raise SystemExit(
+            f"{WEIGHTS_PATH.name} declares stratum value(s) {unknown} that this script "
+            f"has no NASS series for; known: {sorted(STRATUM_SHORT_DESC)}"
+        )
+    split = sum(1 for v in strata.values() if v != "all")
+    log(f"regions: {len(regions)} read from {WEIGHTS_PATH.name} ({split} strata)")
+    return regions, strata, shares
 
 
 def current_crops_filename():
@@ -141,12 +182,18 @@ def without_nulls(lines):
 
 
 def read_state_yields(archive, regions):
-    """{STATE_ALPHA: {year: bu/acre}} for the final annual estimate."""
+    """{series: {STATE_ALPHA: {year: bu/acre}}} for the final annual estimates.
+
+    One pass over a 1.1 GB export reads the state series and, for the split
+    states, the two per-stratum series as well.
+    """
     wanted_states = set(regions.values())
-    by_state = {}
+    wanted_series = {SHORT_DESC} | set(STRATUM_SHORT_DESC.values())
+    by_series = {series: {} for series in wanted_series}
     with gzip.open(archive, mode="rt", encoding="utf-8", errors="replace") as fh:
         for row in csv.DictReader(without_nulls(fh), delimiter="\t"):
-            if row["SHORT_DESC"] != SHORT_DESC:
+            series = row["SHORT_DESC"]
+            if series not in wanted_series:
                 continue
             if row["AGG_LEVEL_DESC"] != "STATE" or row["DOMAIN_DESC"] != "TOTAL":
                 continue
@@ -165,8 +212,8 @@ def read_state_yields(archive, regions):
             raw = (row["VALUE"] or "").strip()
             if raw in SUPPRESSED:
                 continue
-            by_state.setdefault(state, {})[year] = float(raw.replace(",", ""))
-    return by_state
+            by_series[series].setdefault(state, {})[year] = float(raw.replace(",", ""))
+    return by_series
 
 
 def fit_trend(years, values):
@@ -186,17 +233,157 @@ def fit_trend(years, values):
     return intercept, slope, r2, rmse
 
 
+def quantile(sorted_values, fraction):
+    """Linear-interpolated empirical quantile, matching the runner's own."""
+    position = fraction * (len(sorted_values) - 1)
+    low = int(position // 1)
+    high = min(low + 1, len(sorted_values) - 1)
+    weight = position - low
+    return sorted_values[low] * (1 - weight) + sorted_values[high] * weight
+
+
+def deviations_from(series):
+    """{year: deviation_pct} from a fitted trend through the series it is given."""
+    years = sorted(series)
+    values = [series[y] for y in years]
+    intercept, slope, _, _ = fit_trend(years, values)
+    out = {}
+    for year in years:
+        trend = intercept + slope * year
+        out[year] = (series[year] - trend) / trend * 100
+    return out
+
+
+def spread(deviations):
+    """p10-to-p90 spread of a deviation series, in percentage points."""
+    values = sorted(deviations.values())
+    return quantile(values, 0.9) - quantile(values, 0.1)
+
+
+def rescale_to_stratum(state_series, stratum_series, key, stratum):
+    """How much wider a stratum's yield varies than its state's, and its own trend.
+
+    NASS publishes no per-stratum yield for 2019-2024, so this cannot simply be
+    the stratum's history: the window is node 2's and does not move. What the
+    overlapping years do support is a measurement of SCALE. An irrigated crop's
+    yield varies less from year to year than its state's blended average and a
+    rainfed one varies more, and that ratio is what the quantile map needs,
+    because the map reads a rank as a position in a distribution and it is the
+    distribution's width that sets the anomaly it returns.
+
+    So: fit each stratum's own trend over the years NASS does publish, measure
+    the p10-p90 spread of both the stratum and the state over exactly those
+    years, and return their ratio. The caller applies it to the state's
+    full-window deviation series.
+
+    What this assumes, and it is the weakest link in the bundle: that the ratio
+    measured over the published years holds over the whole window, and that a
+    stratum's year-to-year SHAPE is its state's. The second is the stronger
+    claim -- in a year when irrigation is the whole story the two strata do not
+    move together at all -- and it is stated in the output, the README and the
+    Modelfile rather than only here.
+
+    Returns (ratio, detail-dict for the meta file).
+    """
+    overlap = sorted(set(state_series) & set(stratum_series))
+    if len(overlap) < MIN_RATIO_YEARS:
+        raise SystemExit(
+            f"{key}: the {stratum} series overlaps the state series in only "
+            f"{len(overlap)} year(s) inside {PERIOD_START}-{PERIOD_END}, fewer than the "
+            f"{MIN_RATIO_YEARS} this build requires. A dispersion ratio measured on that "
+            f"few years would be noise; do not rescale on it."
+        )
+    stratum_over = {y: stratum_series[y] for y in overlap}
+    state_over = {y: state_series[y] for y in overlap}
+    stratum_dev = deviations_from(stratum_over)
+    state_dev = deviations_from(state_over)
+    stratum_spread = spread(stratum_dev)
+    state_spread = spread(state_dev)
+    if state_spread <= 0 or stratum_spread <= 0:
+        raise SystemExit(f"{key}: degenerate spread; cannot form a dispersion ratio")
+    ratio = stratum_spread / state_spread
+
+    # The stratum's own trend LEVEL, fitted on its own published years. This is
+    # what the production weight uses (acres x trend yield), so it must be the
+    # stratum's yield level and not the state's -- irrigated corn out-yields the
+    # state average in both of these states by a wide margin.
+    years = sorted(stratum_series)
+    intercept, slope, r2, rmse = fit_trend(years, [stratum_series[y] for y in years])
+    detail = {
+        "dispersion_ratio": round(ratio, 4),
+        # The observed, PUBLISHED deviations this ratio was measured from, kept
+        # so the measurement is auditable and so a historical case can be
+        # validated against real stratum ranks rather than reconstructed ones.
+        "observed_deviation_pct": {str(y): round(stratum_dev[y], 4) for y in overlap},
+        "ratio_period": f"{overlap[0]}-{overlap[-1]}",
+        "ratio_years": len(overlap),
+        "stratum_spread_p10_p90_pct": round(stratum_spread, 2),
+        "state_spread_p10_p90_pct": round(state_spread, 2),
+        "series": STRATUM_SHORT_DESC[stratum],
+        "trend_fitted_over": f"{years[0]}-{years[-1]}",
+        "trend_r2": round(r2, 4),
+        "trend_rmse_bu_acre": round(rmse, 3),
+    }
+    return [ratio, intercept, slope, detail]
+
+
 def main():
-    regions = load_regions()
+    regions, strata, shares = load_regions()
     filename = current_crops_filename()
     log(f"current survey export: {filename}")
     archive, last_modified = download(LISTING_URL + filename, CACHE / filename)
 
-    by_state = read_state_yields(archive, regions)
+    by_series = read_state_yields(archive, regions)
+    by_state = by_series[SHORT_DESC]
     expected = PERIOD_END - PERIOD_START + 1
+
+    # Pass 1: measure each stratum against its state, then normalise each split
+    # state's ratios so they recombine to that state's own swing (see
+    # normalise_ratios). This has to happen before any row is written, because
+    # a ratio depends on the other stratum of the same state.
+    measured = {}
+    for key, state in regions.items():
+        stratum = strata[key]
+        if stratum == "all":
+            continue
+        stratum_series = by_series[STRATUM_SHORT_DESC[stratum]].get(state, {})
+        if not stratum_series:
+            raise SystemExit(
+                f"{key}: no {STRATUM_SHORT_DESC[stratum]!r} rows for {state}. "
+                f"production_weights.csv declares this region a {stratum} stratum, "
+                f"so the series that sizes its variability must exist."
+            )
+        measured[key] = rescale_to_stratum(
+            by_state.get(state, {}), stratum_series, key, stratum
+        )
+
+    by_split_state = {}
+    for key in measured:
+        by_split_state.setdefault(regions[key], []).append(key)
+    ratios = {}
+    for state, keys in by_split_state.items():
+        if len(keys) < 2:
+            raise SystemExit(
+                f"{state}: only {keys} present. A split state's two strata are normalised "
+                f"against each other at run time, so both must be in the region set."
+            )
+        for k in keys:
+            ratios[k] = measured[k][0]
+        # Informational only: what the divisor would be on census production
+        # shares. The runner computes the one it actually uses from its own
+        # aggregation weights, which are acres times each region's fitted trend
+        # yield and therefore move with the run year. See normalise_ratios.
+        share_basis = sum(shares[k] / sum(shares[j] for j in keys) * ratios[k]
+                          for k in keys)
+        log(f"{state}: measured ratios " + ", ".join(f"{k} x{ratios[k]:.3f}" for k in keys)
+            + f"; these average to {share_basis:.3f} on production shares, so the runner "
+              f"normalises them against its own weights at run time")
+        for k in keys:
+            measured[k][3]["divisor_on_production_shares"] = round(share_basis, 4)
 
     rows = []
     trends = {}
+    rescalings = {}
     for key, state in regions.items():
         series = by_state.get(state, {})
         if len(series) != expected:
@@ -207,7 +394,23 @@ def main():
             )
         years = sorted(series)
         values = [series[y] for y in years]
-        intercept, slope, r2, rmse = fit_trend(years, values)
+        # The state's own full-window fit. For an unsplit region this is the
+        # region's fit; for a stratum it supplies only the year-to-year shape,
+        # and the stratum's own trend level replaces intercept/slope below.
+        state_intercept, state_slope, r2, rmse = fit_trend(years, values)
+        intercept, slope = state_intercept, state_slope
+        stratum = strata[key]
+
+        if stratum == "all":
+            ratio = 1.0
+        else:
+            _, intercept, slope, detail = measured[key]
+            ratio = ratios[key]
+            rescalings[key] = detail
+            # The state trend statistics describe the state's fit, not this
+            # stratum's; the stratum's own are in `detail`.
+            r2, rmse = detail["trend_r2"], detail["trend_rmse_bu_acre"]
+
         trends[key] = {
             "intercept_bu_acre": round(intercept, 6),
             "slope_bu_acre_per_year": round(slope, 6),
@@ -216,19 +419,30 @@ def main():
         }
         for year in years:
             trend = intercept + slope * year
-            deviation = (series[year] - trend) / trend * 100
+            if stratum == "all":
+                observed = series[year]
+                deviation = (observed - trend) / trend * 100
+            else:
+                # The state's shape, scaled to this stratum's width, placed on
+                # this stratum's own trend level. yield_bu_acre is therefore a
+                # DERIVED figure for a stratum row, not a published NASS value.
+                state_trend = state_intercept + state_slope * year
+                deviation = (series[year] - state_trend) / state_trend * 100 * ratio
+                observed = trend * (1 + deviation / 100)
             rows.append({
                 "region_key": key,
                 "state": state,
                 "year": year,
-                "yield_bu_acre": f"{series[year]:.1f}",
+                "yield_bu_acre": f"{observed:.1f}",
                 "trend_yield_bu_acre": f"{trend:.2f}",
                 "deviation_pct": f"{deviation:.4f}",
             })
-        spread = max(float(r["deviation_pct"]) for r in rows if r["region_key"] == key) - \
-            min(float(r["deviation_pct"]) for r in rows if r["region_key"] == key)
+        observed_spread = max(
+            float(r["deviation_pct"]) for r in rows if r["region_key"] == key
+        ) - min(float(r["deviation_pct"]) for r in rows if r["region_key"] == key)
+        note = "" if stratum == "all" else f", {stratum} rescaled x{ratio:.3f}"
         log(f"{key}: trend {intercept + slope * PERIOD_END:6.1f} bu/ac at {PERIOD_END}, "
-            f"+{slope:.2f}/yr, r2 {r2:.2f}, deviation spread {spread:.1f} pts")
+            f"{slope:+.2f}/yr, r2 {r2:.2f}, deviation spread {observed_spread:.1f} pts{note}")
 
     with open(OUT_PATH, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
@@ -248,16 +462,45 @@ def main():
         "period_start": PERIOD_START,
         "period_end": PERIOD_END,
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "detrending": "per-state ordinary least squares of yield on calendar year; "
+        "detrending": "per-region ordinary least squares of yield on calendar year; "
                       "deviation_pct is the residual as a percentage of the fitted line",
         "trends": trends,
+        "strata": {k: v for k, v in strata.items() if v != "all"},
+        "stratum_rescaling": rescalings,
+        "stratum_rescaling_method": (
+            "NASS publishes a state-level annual IRRIGATED and NON-IRRIGATED corn "
+            "yield for the split states, but both series end in 2018, so 2019-2024 "
+            "are absent and they cannot be a stratum's history over this window. They "
+            "are used instead to MEASURE SCALE: over the overlapping years, each "
+            "stratum's detrended p10-p90 spread is divided by its state's over exactly "
+            "the same years, and the resulting dispersion_ratio multiplies the state's "
+            "full-window deviation series, AFTER being normalised so a split state's two "
+            "ratios recombine to that state's own swing: the raw marginal ratios average "
+            "to 1.086 (NE) and 1.394 (KS) rather than 1, because the two strata do not "
+            "move together (they correlate 0.31 and 0.80 over the published years) and a "
+            "shared-shape reconstruction therefore overshoots. Dividing by that mean "
+            "keeps the measured irrigated-to-rainfed proportion exactly and stops the "
+            "split inflating a state's weight in the national figure; the cost is that a "
+            "stratum's spread is no longer its own measured marginal spread, which is "
+            "recorded per region as dispersion_ratio_measured. Each stratum's trend LEVEL is fitted on its "
+            "own published years and extrapolated over the rest of the window, so the "
+            "production weight uses irrigated corn's yield level rather than the "
+            "state's. A stratum row's yield_bu_acre is therefore DERIVED "
+            "(trend x (1 + deviation)), not a published NASS figure; trend_yield_bu_acre "
+            "and deviation_pct are what the runner reads. Unsplit regions have "
+            "dispersion_ratio 1 and are untouched. ASSUMES the measured ratio holds "
+            "over 2019-2024, and that a stratum's year-to-year shape is its state's -- "
+            "the stronger of the two, because in a year when irrigation is the whole "
+            "story the two strata do not move together at all."
+        ),
         "regions_source": "production_weights.csv",
         "note": (
             "The period must match node 2's baseline window (1995-2024), because a "
             "percentile rank from node 2 is read as the same quantile of this "
             "distribution. The runner refuses to run if the two disagree. The region "
-            "set is read from production_weights.csv rather than redefined here, so "
-            "the two committed tables cannot drift apart."
+            "set and each region's stratum are read from production_weights.csv rather "
+            "than redefined here, so the two committed tables cannot drift apart and "
+            "no stratum is inferred from the spelling of a region key."
         ),
     }, indent=2) + "\n")
     log(f"wrote   {META_PATH.name}")

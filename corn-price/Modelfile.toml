@@ -17,12 +17,12 @@ args = ["{input:corn_yield_snapshot}", "{output:corn_price_regions}"]
 # percentile rank from one cannot be read against the other.
 determinism = "deterministic"
 expected_runtime = "seconds"
-validity_domain = "US corn, in season, at national scale. Built from the ten states the upstream weather model covers, which are 82.5% of US corn-for-grain production; the rest is assumed to be at trend and the coverage share is reported. The upstream yield signal is used as a rank, not a magnitude, because it is a rainfed simulation several times more dispersed than real yields; in heavily irrigated states, mainly Nebraska and Kansas, a rank can still be too low. The transmission is an annual reduced form fitted on 50 years and explains about a third of year-on-year price variation. See the README."
+validity_domain = "US corn, in season, at national scale. Built from the upstream weather model's twelve regions -- ten states, with Nebraska and Kansas each split into an irrigated and a rainfed part -- which are 82.5% of US corn-for-grain production; the rest is assumed at trend and the coverage share is reported. The upstream yield signal is used as a rank, not a magnitude. An irrigated part has no published yield history after 2018, so its distribution is its state's rescaled by a measured factor. The transmission is fitted on 50 years and explains about a third of price variation. See the README."
 not_for = "This is NOT a price forecast, NOT a trading signal and NOT investment advice, and must not be used as any of them. It is the price impact implied by one weather-driven production shock under one stated transmission, holding everything else equal -- demand, policy, the macro environment, the rest of the balance sheet and every other crop are outside it. Trade policy is outside it too: tariffs and lost export sales are not modelled here. Not for field-level or farm-level decisions, and not a substitute for USDA WASDE. Off-season output is valid but near zero by construction."
-provenance = "Upstream: the US Corn Yield model. Production weights and irrigation shares: USDA NASS 2022 Census of Agriculture. Observed state yields 1995-2024: USDA NASS survey series. National balance sheet and prices: USDA ERS Feed Grains Yearbook Tables. Transmission fitted here on 1976-2025; Roberts and Schlenker (2013) and farmdoc daily (2018) ship in the output as cited reference points not used."
+provenance = "Upstream: the US Corn Yield model. Production weights, stratum split and irrigation shares: USDA NASS 2022 Census. Observed state yields 1995-2024 and the irrigated and non-irrigated series behind the stratum rescaling: USDA NASS survey series. Balance sheet and prices: USDA ERS Feed Grains Yearbook. Transmission fitted here on 1976-2025; two literature estimates ship as cited reference points."
 
 [resources]
-# Reading four small committed tables and doing arithmetic over ten rows. The
+# Reading four small committed tables and doing arithmetic over twelve rows. The
 # thirty-year fits and the bootstrap are precomputed, not run here.
 memory = "256Mi"
 cpu = "0.5"
@@ -240,6 +240,26 @@ description = "The region's stable identifier."
 type = "string"
 description = "Two-letter state code."
 
+[outputs.schema.properties.regions.items.properties.stratum]
+type = "string"
+# Declared in production_weights.csv, never inferred from the spelling of the
+# region key, exactly as the upstream yield model declares its water regime.
+description = "Whether this row is a whole state (\"all\") or one irrigated or rainfed part of one. Nebraska and Kansas are split because irrigation covers a large share of their corn; the other eight states are not."
+
+[outputs.schema.properties.regions.items.properties.stratum_dispersion_ratio]
+type = "number"
+description = "For a split state only: how much narrower or wider this part's year-to-year yield swings are taken to be than its whole state's, as applied in this run. Below 1 for an irrigated part, above 1 for a rainfed one. Absent for a state that is not split."
+
+[outputs.schema.properties.regions.items.properties.stratum_dispersion_ratio_measured]
+type = "number"
+# The measurement, before the run-time normalisation. Shipped so the applied
+# figure can be checked against the data it came from.
+description = "For a split state only: the figure actually measured from USDA's published irrigated and non-irrigated yield series, before it was normalised. Absent for a state that is not split."
+
+[outputs.schema.properties.regions.items.properties.stratum_normalisation_divisor]
+type = "number"
+description = "For a split state only: what the measured figure was divided by so that splitting the state does not change how much it counts toward the national figure. It depends on this run's weights, so it moves slightly with the year. Absent for a state that is not split."
+
 [outputs.schema.properties.regions.items.properties.date]
 type = "string"
 format = "date"
@@ -258,43 +278,50 @@ description = "The upstream model's own percentage, shown for comparison only."
 [outputs.schema.properties.regions.items.properties.yield_anomaly_real_pct]
 type = "number"
 unit = "%"
-description = "What that rank means against thirty years of this state's actual yields: the number that is actually used. An average season comes out at zero."
+description = "What that rank means against thirty years of this region's own observed yield distribution: the number that is actually used. An average season comes out at zero."
 
 [outputs.schema.properties.regions.items.properties.dispersion_ratio]
 type = "number"
 # The schema format has no nullable type, so this key is OMITTED rather than set
 # to null when the upstream document carries no baseline quantiles for a region.
-description = "How much wider the upstream model's spread of yields is than this state's real one. Above 1 everywhere, and largest in the irrigated states, which is why the rank is used instead of the percentage. Absent when the upstream document does not report a baseline spread for the region."
+description = "How much wider the upstream model's spread of yields is than this region's real one. Above 1 everywhere, which is why the rank is used instead of the percentage. It is *lowest* for the irrigated parts of a split state, because irrigation damps the simulated and the real crop alike -- so this is not a way to tell which regions are irrigated; read the stratum field for that. Absent when the upstream document does not report a baseline spread for the region."
 
 [outputs.schema.properties.regions.items.properties.production_weight]
 type = "number"
-description = "This state's share of the covered states' normal-year production, from 0 to 1."
+description = "This region's share of the covered regions' normal-year production, from 0 to 1. For one part of a split state, that part's own share -- its acres times its own trend yield."
 
 [outputs.schema.properties.regions.items.properties.contribution_pct]
 type = "number"
 unit = "%"
-description = "What this state contributed to the covered yield shock: its weight times its real anomaly."
+description = "What this region contributed to the covered yield shock: its weight times its real anomaly. The two parts of a split state contribute separately and sum to that state's contribution."
 
 [outputs.schema.properties.regions.items.properties.production_share_of_us]
 type = "number"
-description = "This state's share of all US corn-for-grain production, from 0 to 1."
+description = "This region's share of all US corn-for-grain production, from 0 to 1. The two parts of a split state sum to that state's share."
 
 [outputs.schema.properties.regions.items.properties.irrigated_share]
 type = "number"
 # Same rule: USDA withholds a figure that would identify an operation, and the
 # key is omitted rather than set to null. It is never read as zero -- that would
 # say "this state does not irrigate".
-description = "The share of this state's harvested corn acres that are irrigated. The upstream model treats every state as rainfed, so a high value here means its reading is less reliable. Absent where USDA withheld the figure for disclosure."
+description = "The share of THIS REGION's harvested corn acres that are irrigated. For one part of a split state that is 1 or 0 by construction, because the part is defined by its irrigation; for a state that is not split it is the measured state figure. Use state_irrigated_share to compare states. Absent where USDA withheld the figure for disclosure."
+
+[outputs.schema.properties.regions.items.properties.state_irrigated_share]
+type = "number"
+# Carried on every row, including the parts of a split state, so the figure
+# stays comparable across split and unsplit regions. This is the one node 1's
+# 20% split threshold is applied to.
+description = "The share of the WHOLE STATE's harvested corn acres that are irrigated, the same value on both parts of a split state. This is what decides whether a state is split at all. Absent where USDA withheld the figure for disclosure."
 
 [outputs.schema.properties.regions.items.properties.acres_harvested]
 type = "number"
 unit = "acres"
-description = "Harvested corn-for-grain acres, 2022 Census."
+description = "Harvested corn-for-grain acres, 2022 Census. For one part of a split state, that part's acres."
 
 [outputs.schema.properties.regions.items.properties.trend_yield_bu_acre]
 type = "number"
 unit = "bu/acre"
-description = "What this state yields in a normal year at this year's trend."
+description = "What this region yields in a normal year at this year's trend. Each part of a split state has its own trend level, fitted on its own published years -- irrigated corn out-yields its state average by a wide margin in both split states."
 
 [outputs.schema.properties.assumptions]
 type = "object"
@@ -311,7 +338,7 @@ description = "How the upstream rank was put on a real-world scale, and how to a
 
 [outputs.schema.properties.assumptions.properties.weighting]
 type = "string"
-description = "How the states were combined, and why actual 2022 production was not used as the weight."
+description = "How the regions were combined -- each one's acres times its OWN fitted trend yield, so the two parts of a split state are weighted separately -- and why actual 2022 production was not used as the weight."
 
 [outputs.schema.properties.assumptions.properties.coverage]
 type = "string"
@@ -323,7 +350,11 @@ description = "Where the yield trend comes from, since the upstream model delibe
 
 [outputs.schema.properties.assumptions.properties.irrigation]
 type = "string"
-description = "What the rescaling does and does not fix about the upstream model treating every state as rainfed."
+description = "How irrigation is handled: which states are split into irrigated and rainfed parts, what the upstream model does with them, and what its assumption of unlimited water leaves uncorrected here."
+
+[outputs.schema.properties.assumptions.properties.stratum_rescaling]
+type = "string"
+description = "How an irrigated or rainfed part of a split state gets its own thirty-year yield distribution, given that USDA stopped publishing one in 2018, and what that workaround assumes."
 
 [outputs.schema.properties.assumptions.properties.transmission]
 type = "string"
@@ -358,7 +389,7 @@ description = "One effect the model does not capture."
 # future step. Its required-key set differs from corn_price_impact's, so a
 # downstream binding is unambiguous.
 name = "corn_price_regions"
-description = "The per-region contributions as a plain table: rank, real-scale anomaly, production weight and contribution, one row per state."
+description = "The per-region contributions as a plain table: stratum, rank, real-scale anomaly, production weight and contribution, one row per region."
 
 [outputs.schema]
 type = "object"
@@ -390,6 +421,10 @@ description = "The region's stable identifier."
 type = "string"
 description = "Two-letter state code."
 
+[outputs.schema.properties.rows.items.properties.stratum]
+type = "string"
+description = "Whether this row is a whole state (\"all\") or one irrigated or rainfed part of one."
+
 [outputs.schema.properties.rows.items.properties.yield_percentile_rank]
 type = "number"
 unit = "%"
@@ -398,11 +433,11 @@ description = "Where the upstream model put this season among the last thirty."
 [outputs.schema.properties.rows.items.properties.yield_anomaly_real_pct]
 type = "number"
 unit = "%"
-description = "What that rank means against thirty years of this state's actual yields."
+description = "What that rank means against thirty years of this region's own observed yield distribution."
 
 [outputs.schema.properties.rows.items.properties.production_weight]
 type = "number"
-description = "This state's share of the covered states' normal-year production."
+description = "This region's share of the covered regions' normal-year production."
 
 [outputs.schema.properties.rows.items.properties.contribution_pct]
 type = "number"
