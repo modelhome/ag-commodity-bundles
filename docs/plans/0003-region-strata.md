@@ -158,11 +158,11 @@ Verified on 2026-09-21 against the cached bulk exports, not from memory.
 | AC-1 | Valid output over a real twelve-region snapshot; unknown key still fails loudly | `production_weights.csv`, `yield_history.csv`, `sample_input.json` regenerated from a real node 2 run at `24d658b` | Runner produces both outputs; `check_loud_failures` passes; subset check re-pointed at `ne_irrigated` | **pass** |
 | AC-2 | Twelve weight rows; split acres sum to the state total; shares still sum to 82.47% | `build_weights.py` `apportion_state` + `STRATA` | `check_tables`: NE and KS strata sum to published census acres; coverage 0.824706, unchanged | **pass** |
 | AC-3 | 30 rows per region for 1995-2024 on all twelve keys | `build_yield_history.py` | 360 rows, 30 per region; `check_periods` and the exact-year check pass in a full run | **pass** |
-| AC-4 | Dispersion ratio matches the NASS measurement, recorded with window and source | `rescale_to_stratum`, `yield_history.meta.json` | `check_stratum_rescaling`: direction, year count, series pinning, and the committed-spread/recorded-ratio identity | **pass** |
-| AC-5 | Every region's output `dispersion_ratio` above 1, both irrigated strata included | unchanged runner logic on per-stratum distributions | `check_rescaling`: 2.7x to 9.2x; irrigated stratum below its rainfed one in both states | **pass** |
-| AC-6 | 2012 drought validation over twelve regions | `check_price.py` AC-9 block, unmodified | modelled **-22.64%** vs actual **-22.23%** (ten-region baseline was -21.92%) | **pass** |
+| AC-4 | Dispersion ratio matches the NASS measurement, recorded with window and source | `rescale_to_stratum`, `yield_history.meta.json` | `check_stratum_rescaling`: direction, year count, series pinning, the committed-spread/recorded-ratio identity, and the weight-neutrality invariant in the runner's own weights | **pass** |
+| AC-5 | Every region's output `dispersion_ratio` above 1, both irrigated strata included | unchanged runner logic on per-stratum distributions | `check_rescaling`: **2.7x to 9.2x**; irrigated stratum below its rainfed one in both states | **pass** |
+| AC-6 | 2012 drought validation over twelve regions | `check_price.py` AC-9 block, unmodified | modelled **-21.52%** vs actual **-22.23%** (0.71 pts), with the four strata ranked on USDA's **published** 1995-2018 stratum series rather than this model's reconstruction; ten-region baseline was -21.92% (0.31 pts) | **pass** |
 | AC-7 | Rescaling and irrigated upper bound in output, Modelfile and README | `runner.py` assumptions + `not_captured`, `Modelfile.toml`, README section 1b | `check_stratum_rescaling` asserts all three; Modelfile validates with no annotation warnings | **pass** |
-| AC-8 | Full suite passes; transmission and price tables unchanged | - | 133/133; `git diff --stat` empty for `transmission.json`, `price_history.csv`, `price_history.meta.json`, both price build scripts | **pass** |
+| AC-8 | Full suite passes; transmission and price tables unchanged | - | **157/157**; `git diff --stat` empty for `transmission.json`, `price_history.csv`, `price_history.meta.json`, both price build scripts | **pass** |
 
 ## Verification
 
@@ -170,8 +170,8 @@ Baseline captured at planning time on commit `896f6ca`.
 
 | Command | Purpose | Baseline result | Final result |
 |---|---|---|---|
-| `python3 corn-price/runner.py corn-price/sample_input.json run/corn_price_regions.output.json > run/corn_price_impact.output.json` | The model runs and produces both outputs | **pass** — 10 regions, US shock +0.2303%, impact -0.1801% | **pass** — 12 regions, US shock +0.1949%, impact -0.1524% (unchanged/expected) |
-| `cd corn-price && uv run --python 3.12 python check_price.py` | The modelling claims, end to end | **95/95 checks pass** | **133/133 checks pass** (38 added) — improved |
+| `python3 corn-price/runner.py corn-price/sample_input.json run/corn_price_regions.output.json > run/corn_price_impact.output.json` | The model runs and produces both outputs | **pass** — 10 regions, US shock +0.2303%, impact -0.1801% | **pass** — 12 regions, US shock **+0.1331%**, impact **-0.1041%** |
+| `cd corn-price && uv run --python 3.12 python check_price.py` | The modelling claims, end to end | **95/95 checks pass** | **157/157 checks pass** (62 added across two Copilot reviews) — improved |
 | `cd corn-price && docker build -t ag-corn-price:local . && docker run --rm --network none ag-corn-price:local` | Image builds; determinism claim holds | **pass** — US shock 0.2303, impact -0.1801, identical to the local run | **pass** — identical to the local run apart from `generated_at`, `--network none` — unchanged |
 | `python3 corn-price/build_weights.py --regions ../agromet-bundles/crop-weather/regions.csv` | The region map agrees with node 1 | **fails as predicted** — `only upstream: ['ks_irrigated', 'ks_rainfed', 'ne_irrigated', 'ne_rainfed']; only here: ['ks', 'ne']`. This is the break; it must pass after. | **pass** — `regions: verified against .../regions.csv` — regression fixed |
 
@@ -328,12 +328,12 @@ beside them as `dispersion_ratio_measured`. Cost: a stratum's spread is no
 longer its own measured marginal spread, which is stated in the meta file, the
 README and the output.
 
-Measured effect: the 2012 end-to-end case improved from -22.64% to **-21.97%**
-against the actual -22.23%, and a 24-year backtest of the national figure now
-reproduces the ten-region model's RMSE (1.19 points) exactly -- which is what a
-weight-neutral split should do.
+Measured effect: a 24-year backtest of the national figure reproduces the
+ten-region model's RMSE (1.19 points) exactly, which is what a weight-neutral
+split should do. See C-7 for the correction to where the normalisation happens,
+and C-8 for what the 2012 case says once it is tested honestly.
 
-### C-6. Copilot review (PR #3): five findings, all valid
+### C-6. Copilot review 1 (PR #3): five findings, all valid
 
 1. **`irrigated_share` changed meaning on a split row** and the schema still
    described the old one. Now explicitly the region's own share, with a new
@@ -352,6 +352,54 @@ weight-neutral split should do.
    removed. Regenerated.
 
 Checks 133 -> 148 -> **154** with C-5's normalisation.
+
+### C-7. Normalising in the table was exact for no run at all (Copilot review 2, HIGH)
+
+C-5 divided the stratum ratios by their production-share-weighted mean at build
+time. But the runner does not weight by production share: it weights by acres
+times **each region's own fitted trend yield at the run's year**
+(`runner.py` `weight_raw`). The two strata have their own trend slopes, so the
+two bases diverge -- and the divergence grows with the year. Measured, the
+build-time normalisation left Nebraska **+3.3% over-weighted in 2024, +4.1% in
+2030 and +5.1% in 2040**, and Kansas +2.0% to +2.7%. Better than the +8.6% and
++39.4% C-5 removed, but silent and drifting, which is worse in character.
+
+Fixed at the root: the committed table now carries the **measured** ratios, and
+`normalise_ratios` moved into `runner.py`, which computes the divisor from the
+weights it is about to use and rescales that state's mapped anomalies by it. The
+identity is then exact at every run year. This is sound because the committed
+stratum series is the state's scaled elementwise, so the quantile map is linear
+in the distribution's scale and dividing the mapped anomaly is identical to
+having scaled the distribution.
+
+Each row now ships `stratum_dispersion_ratio` (applied),
+`stratum_dispersion_ratio_measured` and `stratum_normalisation_divisor`, and the
+check recomputes the invariant from the output's own `production_weight` --
+Copilot's second finding, that a check on the production-share basis could pass
+while the runner was not weight-neutral. Measured: applied mean **1.0000** in
+both states, against 1.1252 (NE) and 1.4240 (KS) unnormalised.
+
+### C-8. The 2012 case was validating the reconstruction against itself
+
+`check_price.py` derived every 2012 rank from `yield_history.csv`, but for the
+four strata that file holds the state series *rescaled* -- a reconstruction, not
+an observation. Ranking it against itself tested nothing about the strata.
+
+`build_yield_history.py` now records the published per-stratum deviations it
+measured the ratio from (`observed_deviation_pct`), and the 2012 case ranks the
+four strata against those. The real 2012 ranks are `ne_irrigated` p17,
+`ne_rainfed` p0, `ks_irrigated` p8, `ks_rainfed` p0 -- irrigated Nebraska barely
+felt the drought.
+
+**The honest result is worse, and that is the point.** Modelled **-21.52%**
+against the actual **-22.23%**, an error of **0.71 points**, against the
+ten-region model's 0.31. Ranking the strata against their own rescaled series
+would have reported 0.26. The extra error is the shared-shape assumption being
+paid for in the open: the reconstruction cannot represent a season in which the
+irrigated stratum is near trend while the rainfed one collapses, which is
+exactly what 2012 was. This is the strongest evidence in the bundle for the
+limitation already named in `not_captured`, and it now sits in the check suite
+rather than in a comment.
 
 ## Risks and follow-ups
 

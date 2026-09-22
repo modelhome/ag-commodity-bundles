@@ -228,27 +228,41 @@ def check_stratum_rescaling(document, weights, deviations, metas):
               detail["series"].endswith("MEASURED IN BU / ACRE"), detail["series"])
 
     # Splitting a state must not change how much say it has in the national
-    # figure. The raw marginal ratios do not recombine to the state -- they
-    # average to 1.086 (NE) and 1.394 (KS), because the two strata correlate
-    # only 0.31 and 0.80 -- so they are normalised. This asserts the property
-    # that normalisation exists to guarantee, and that the measured proportion
-    # between the two strata survives it.
+    # figure. The invariant is checked in the weights the RUNNER actually used
+    # -- production_weight in the output, which is acres times each region's
+    # fitted trend yield at the run's year -- and not in the census production
+    # shares the table happens to be built on. Those two bases differ, and the
+    # gap widens with the run year, so a check on the wrong basis would pass
+    # while the model was not weight-neutral.
+    out_regions = {r["region_key"]: r for r in document["regions"]}
     for state, (irr, rain) in SPLIT_STATES.items():
-        if not (irr in rescaling and rain in rescaling):
+        if not all(k in out_regions for k in (irr, rain)):
             continue
-        total = sum(float(weights[k]["production_share_of_us"]) for k in (irr, rain))
-        mean = sum(float(weights[k]["production_share_of_us"]) / total
-                   * rescaling[k]["dispersion_ratio"] for k in (irr, rain))
+        members = [out_regions[k] for k in (irr, rain)]
+        if not all("stratum_dispersion_ratio_measured" in r for r in members):
+            check(f"{state}: stratum rows carry the measured ratio", False)
+            continue
+        total = sum(r["production_weight"] for r in members)
+        mean = sum(r["production_weight"] / total
+                   * r["stratum_dispersion_ratio"] for r in members)
         check(f"{state}: splitting it does not change its weight in the national figure",
-              close(mean, 1.0, 1e-3), f"production-weighted mean of ratios = {mean:.4f}")
-        got = rescaling[irr]["dispersion_ratio"] / rescaling[rain]["dispersion_ratio"]
-        want = (rescaling[irr]["dispersion_ratio_measured"]
-                / rescaling[rain]["dispersion_ratio_measured"])
+              close(mean, 1.0, 1e-3),
+              f"weighted mean of applied ratios = {mean:.4f}, in the runner's own weights")
+        measured_mean = sum(r["production_weight"] / total
+                            * r["stratum_dispersion_ratio_measured"] for r in members)
+        check(f"{state}: the raw measured ratios would NOT have been weight-neutral",
+              not close(measured_mean, 1.0, 1e-2),
+              f"they average {measured_mean:.4f}; this is what the normalisation removes")
+        got = (members[0]["stratum_dispersion_ratio"]
+               / members[1]["stratum_dispersion_ratio"])
+        want = (members[0]["stratum_dispersion_ratio_measured"]
+                / members[1]["stratum_dispersion_ratio_measured"])
         check(f"{state}: normalisation preserves the measured irrigated:rainfed proportion",
               close(got, want, 1e-3), f"{got:.4f} vs measured {want:.4f}")
-        check(f"{state}: the raw marginal ratios are kept alongside the normalised ones",
-              "dispersion_ratio_measured" in rescaling[irr]
-              and "state_normalisation_divisor" in rescaling[irr])
+        check(f"{state}: the divisor is reported on the row",
+              all(close(r["stratum_normalisation_divisor"],
+                        r["stratum_dispersion_ratio_measured"]
+                        / r["stratum_dispersion_ratio"], 1e-3) for r in members))
 
     # Both of a state's strata are the SAME state series scaled by their own
     # ratio, so the ratio of their committed spreads must equal the ratio of
@@ -529,7 +543,7 @@ def check_aggregation(document):
 
 # --------------------------------------------------- the transmission (AC-9)
 
-def check_transmission(document, transmission, deviations):
+def check_transmission(document, transmission, deviations, metas):
     print("\nAC-9  the price response is cited, signed correctly and always ranged")
     national = document["national"]
 
@@ -591,6 +605,23 @@ def check_transmission(document, transmission, deviations):
         history = list(csv.DictReader(fh))
     dev_2012 = {r["region_key"]: float(r["deviation_pct"])
                 for r in history if r["year"] == "2012"}
+    # For the four strata, yield_history.csv holds the state series rescaled --
+    # a reconstruction, not an observation. Ranking against it would test the
+    # reconstruction against itself. The build records the PUBLISHED per-stratum
+    # deviations it measured the ratio from, so the strata are ranked against
+    # those instead and this is a real historical case for all twelve regions.
+    rescaling = metas["yield_history"].get("stratum_rescaling") or {}
+    observed_rank = {}
+    for key, detail in rescaling.items():
+        series = detail.get("observed_deviation_pct") or {}
+        if "2012" not in series:
+            continue
+        values = sorted(series.values())
+        observed_rank[key] = (100.0 * sum(1 for v in values if v < series["2012"])
+                              / len(values))
+    check("the four strata are ranked on PUBLISHED 2012 observations, not the "
+          "rescaled series", len(observed_rank) == 4,
+          ", ".join(f"{k} p{observed_rank[k]:.0f}" for k in sorted(observed_rank)))
     # The dates matter as much as the ranks: production weights are acres times
     # the TREND yield for the snapshot's year, so leaving the sample's 2026 dates
     # in place would weight a 2012 episode with 2026 trend yields and the check
@@ -599,8 +630,11 @@ def check_transmission(document, transmission, deviations):
     snapshot["metadata"]["date"] = "2012-09-20"
     for row in snapshot["rows"]:
         key = row["region_key"]
-        series = deviations[key]
-        rank = 100.0 * sum(1 for v in series if v < dev_2012[key]) / len(series)
+        if key in observed_rank:
+            rank = observed_rank[key]
+        else:
+            series = deviations[key]
+            rank = 100.0 * sum(1 for v in series if v < dev_2012[key]) / len(series)
         row["yield_percentile_rank"] = rank
         row["date"] = "2012-09-20"
     with tempfile.TemporaryDirectory() as tmp:
@@ -826,7 +860,7 @@ def main(argv):
     check_export_exposure(document, metas)
     check_rescaling(document, deviations)
     check_aggregation(document)
-    check_transmission(document, transmission, deviations)
+    check_transmission(document, transmission, deviations, metas)
     check_loud_failures()
     check_contract(document)
     check_annotations(document)

@@ -157,15 +157,28 @@ sum of its parts. Used raw, the split would have handed Nebraska 8.6% and Kansas
 **39.4%** more influence over the national shock than treating each as one
 region did, which is an artifact and not a modelling choice.
 
-So the factors are **normalised**: divided by their own production-weighted
-mean, which preserves the measured irrigated-to-rainfed proportion exactly while
-making a split state recombine to its own observed swing. Shipped factors are NE
-0.456 / 1.941 and KS 0.443 / 1.388; the raw measurements ship beside them as
-`dispersion_ratio_measured`. The cost, stated because it is real: a stratum's
-spread is no longer its own measured marginal spread. Per-stratum figures are
-intermediate and the national figure is the output, so preserving the aggregate
-is the right trade — but a reader of a single stratum row should know its width
-is set by that choice.
+So the factors are **normalised**: divided by their own weighted mean, which
+preserves the measured irrigated-to-rainfed proportion exactly while making a
+split state recombine to its own observed swing.
+
+**The normalisation happens in the runner, not in the committed table**, and the
+reason is worth stating. The weights that decide how much a region counts are
+acres times *that region's own fitted trend yield at the run's year* — not the
+census production shares the table is built on. Because the two strata have
+their own trend slopes, those two bases drift apart: normalising on production
+shares left Nebraska 3.3% over-weighted in 2024 and 5.1% in 2040, a silent error
+that grows with time. So `yield_history.csv` carries the **measured** factors
+(NE 0.495 / 2.108, KS 0.617 / 1.936) and the runner divides by the divisor it
+computes from the weights it is about to use. The identity then holds exactly at
+every run year, and each row ships
+`stratum_dispersion_ratio` (applied), `stratum_dispersion_ratio_measured` and
+`stratum_normalisation_divisor` so the arithmetic is auditable from the output.
+
+The cost, stated because it is real: a stratum's applied spread is no longer its
+own measured marginal spread. Per-stratum figures are intermediate and the
+national figure is the output, so preserving the aggregate is the right trade —
+but a reader of a single stratum row should know its width is set by that
+choice.
 
 **The awkward part, stated plainly.** NASS publishes those per-stratum series
 for Nebraska and Kansas, but **both end in 2018** — 24 of the 30 years in the
@@ -441,18 +454,18 @@ Sample run, 2026-09-21, all twelve regions from a real node 1 → node 2 chain:
 | ia | 70.0 | +22.0 | +1.10 | 6.6x | 0.216 | +0.24 |
 | il | 50.0 | +1.9 | 0.00 | 6.0x | 0.181 | 0.00 |
 | in | 83.3 | +26.0 | +4.35 | 5.7x | 0.086 | +0.38 |
-| ks_irrigated | 63.3 | +7.8 | +1.26 | 3.8x | 0.020 | +0.02 |
-| ks_rainfed | 60.0 | +57.8 | +3.07 | 7.8x | 0.031 | +0.10 |
+| ks_irrigated | 63.3 | +7.8 | +1.23 | 2.7x | 0.020 | +0.02 |
+| ks_rainfed | 60.0 | +57.8 | +3.01 | 5.6x | 0.031 | +0.09 |
 | mn | 30.0 | -41.8 | -5.45 | 5.3x | 0.123 | -0.67 |
 | mo | 60.0 | +12.5 | +5.78 | 3.1x | 0.041 | +0.24 |
-| ne_irrigated | 50.0 | +0.2 | 0.00 | 3.1x | 0.086 | 0.00 |
-| ne_rainfed | 70.0 | +40.4 | +3.74 | 4.8x | 0.055 | +0.21 |
+| ne_irrigated | 50.0 | +0.2 | 0.00 | 2.8x | 0.086 | 0.00 |
+| ne_rainfed | 70.0 | +40.4 | +3.61 | 4.4x | 0.055 | +0.20 |
 | oh | 50.0 | -0.5 | 0.00 | 4.2x | 0.051 | 0.00 |
 | sd | 26.7 | -43.7 | -3.88 | 9.2x | 0.064 | -0.25 |
 | wi | 40.0 | -14.8 | -2.01 | 6.6x | 0.046 | -0.09 |
 
-Covered shock **+0.17%**, US shock **+0.14%** over 82.5% of production
-(**+2.83%** unmapped). Price impact **-0.11%** [-0.18, -0.06], or
+Covered shock **+0.16%**, US shock **+0.13%** over 82.5% of production
+(**+2.83%** unmapped). Price impact **-0.10%** [-0.17, -0.05], or
 **-$0.005/bu** on a $4.80 reference. A genuinely unremarkable season implies
 almost nothing, which is the behaviour to expect.
 
@@ -460,19 +473,27 @@ Note `ne_irrigated` at rank 50.0 against `ne_rainfed` at 70.0 on the same
 weather: the two strata carry different signal, which is the point of splitting
 them.
 
-`check_price.py`: **154/154 checks pass** (95 before brief 0003, 133 before the
-Copilot review). Notably:
+`check_price.py`: **157/157 checks pass** (95 before brief 0003, then 133 and 154
+across two Copilot reviews). Notably:
 
-- **The 2012 drought, end to end.** Feeding each region's *actual* 2012 rank
-  reproduces a US yield shock of **-21.97%** against the actual national
-  deviation of **-22.23%** - 0.26 points, and the case is dated 2012 so the
+- **The 2012 drought, end to end, on published stratum observations.** The four
+  strata are ranked against USDA's *published* 1995-2018 irrigated and
+  non-irrigated series, not against this model's own rescaled reconstruction, so
+  the case tests the reconstruction rather than confirming it. In 2012 that puts
+  `ne_irrigated` at the 17th percentile and `ne_rainfed` at the 0th -- irrigated
+  Nebraska barely felt the drought. Result: a US yield shock of **-21.52%**
+  against the actual national deviation of **-22.23%**, **0.71 points**. That is
+  a larger error than the ten-region model's 0.31, and the gap is the
+  shared-shape assumption being paid for honestly rather than hidden: ranking
+  the strata against their own rescaled series instead would have given 0.26 and
+  proved nothing. The case is dated 2012 so the
   weights use 2012 trend yields. That tests the mapping, the stratum rescaling,
   the weighting and the coverage assumption against a real outcome rather than
   against themselves. The actual 2012 price move (+10.8%) falls inside the
   implied range (+9.3% to +33.3%), which is a weak test on one observation and
   is labelled as one.
-- A tenth-percentile season everywhere gives a **-9.80%** US shock and a
-  **+7.97%** [+3.93, +13.25] price impact: right sign, plausible size.
+- A tenth-percentile season everywhere gives a **-9.76%** US shock and a
+  **+7.94%** [+3.91, +13.20] price impact: right sign, plausible size.
 - Node 2 is over-dispersed in every region (3.1x to 9.2x), and within each split
   state the irrigated stratum is the **less** over-dispersed of the two -
   irrigation damps the simulation and the observation alike, which is the
@@ -483,9 +504,11 @@ Copilot review). Notably:
 - The committed stratum spreads match the recorded dispersion ratios exactly,
   so `yield_history.csv` and `yield_history.meta.json` cannot describe different
   rescalings.
-- **Splitting a state does not change its weight in the national figure**: each
-  split state's production-weighted mean ratio is 1.000, and the measured
-  irrigated-to-rainfed proportion survives the normalisation.
+- **Splitting a state does not change its weight in the national figure**:
+  checked in the weights the runner actually used, each split state's mean
+  applied ratio is **1.0000**, while the raw measured ratios would have averaged
+  1.1252 (NE) and 1.4240 (KS). The measured irrigated-to-rainfed proportion
+  survives the normalisation exactly.
 - A snapshot whose water regime disagrees with this model's stratum exits 1,
   in both directions and when the regime is absent entirely.
 - No code infers a stratum from the spelling of a region key; a check asserts

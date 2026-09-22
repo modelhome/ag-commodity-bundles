@@ -236,6 +236,46 @@ def check_periods(node2_metadata, yield_meta):
     return local_period, upstream_period
 
 
+def normalise_ratios(ratios, weights, state):
+    """Divide a split state's stratum ratios by their own weighted mean.
+
+    Why any normalisation is needed. The raw ratios are each measured against
+    the state MARGINALLY: the irrigated series' spread over the state's, and
+    the rainfed series' over the state's. Used as measured they do not
+    recombine to the state -- weighted, they average 1.086 for Nebraska and
+    1.394 for Kansas, not 1 -- so splitting a state would silently hand it that
+    much more influence over the national shock than treating it as one region
+    did. Marginal spreads add linearly only when the two series move together,
+    and over the published years they correlate 0.31 in Nebraska and 0.80 in
+    Kansas. The real state series already embeds that diversification and is
+    narrower than the sum of its parts; a shared-shape reconstruction
+    overshoots.
+
+    Why the RUNNER does this and not this build script. The weights that decide
+    how much a region contributes are the runner's: acres times that region's
+    fitted trend yield, evaluated at the run's year. They are not the census
+    production shares, and because the two strata have their own trend slopes
+    the gap between the two bases WIDENS with the year -- normalising on
+    production shares left Nebraska 3.3% over-weighted in 2024 and 5.1% in
+    2040. A build-time divisor is therefore exact for no run at all. The runner
+    computes the divisor from the weights it is about to use, so the identity
+    holds exactly at every run year.
+
+    The measured irrigated-to-rainfed proportion is untouched by this: dividing
+    both by a common number leaves their ratio exactly as the data set it. What
+    it does change is that a stratum's spread is no longer its own measured
+    marginal spread, which is why the measurement ships beside it as
+    dispersion_ratio_measured.
+    """
+    total = sum(weights.values())
+    if total <= 0:
+        raise RunError(f"{state}: stratum weights sum to {total}")
+    mean = sum(weights[k] / total * ratios[k] for k in ratios)
+    if mean <= 0:
+        raise RunError(f"{state}: stratum ratios average to {mean}; cannot normalise")
+    return {k: v / mean for k, v in ratios.items()}, mean
+
+
 def check_baseline_regimes(node2_metadata, weights, keys):
     """Node 2's water regime per region must match this model's stratum for it.
 
@@ -359,10 +399,6 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
             "dispersion_ratio": None if ratio is None else round(ratio, 2),
             "irrigated_share": info["irrigated_share"],
             "state_irrigated_share": info["state_irrigated_share"],
-            # How much this region's observed distribution was widened (rainfed)
-            # or narrowed (irrigated) relative to its state's. Omitted for an
-            # unsplit region, whose distribution is its own.
-            "stratum_dispersion_ratio": stratum_ratios.get(key),
             "acres_harvested": info["acres_harvested"],
             "trend_yield_bu_acre": round(region_trend_yield, 2),
             "production_share_of_us": info["production_share_of_us"],
@@ -374,14 +410,47 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
         # disclosure, and dispersion_ratio when the upstream document carries no
         # baseline quantiles for the region.
         for optional in ("irrigated_share", "state_irrigated_share",
-                         "dispersion_ratio", "stratum_dispersion_ratio",
-                         "yield_anomaly_simulated_pct"):
+                         "dispersion_ratio", "yield_anomaly_simulated_pct"):
             if regions[-1].get(optional) is None:
                 del regions[-1][optional]
 
     # Every key is known to have a table row by here, so this reports every
     # regime mismatch at once rather than only the first.
     check_baseline_regimes(metadata, weights, [r["region_key"] for r in regions])
+
+    # Normalise each split state's stratum ratios against the weights this run
+    # is actually about to use, then rescale that state's mapped anomalies by
+    # the same divisor. Doing it here rather than in the committed table is what
+    # makes the identity exact: the weights are acres times each region's fitted
+    # trend yield at THIS year, and because the two strata have their own trend
+    # slopes that basis drifts away from the census production shares the table
+    # is built on. See normalise_ratios.
+    strata_by_state = {}
+    for region in regions:
+        if region["stratum"] != "all":
+            strata_by_state.setdefault(region["state"], []).append(region)
+    for state, members in strata_by_state.items():
+        ratios = {r["region_key"]: stratum_ratios[r["region_key"]] for r in members}
+        if len(ratios) != len(members) or not ratios:
+            raise RunError(
+                f"{state}: a stratum row has no recorded dispersion ratio in "
+                f"{YIELD_HISTORY_META_PATH.name}; rebuild the yield history."
+            )
+        weights_here = {r["region_key"]: r["_weight_raw"] for r in members}
+        normalised, divisor = normalise_ratios(ratios, weights_here, state)
+        for region in members:
+            key = region["region_key"]
+            # The committed series is the state's scaled by the MEASURED ratio,
+            # so dividing the mapped anomaly by the divisor is exactly the same
+            # as having scaled the distribution by ratio/divisor: the quantile
+            # map is linear in the distribution's scale.
+            region["yield_anomaly_real_pct"] = round(
+                region["yield_anomaly_real_pct"] / divisor, 4
+            )
+            region["stratum_dispersion_ratio"] = round(normalised[key], 4)
+            region["stratum_dispersion_ratio_measured"] = round(ratios[key], 4)
+            region["stratum_normalisation_divisor"] = round(divisor, 4)
+        log(f"{state}: strata normalised by {divisor:.4f} on this run's weights")
 
     total_weight = sum(r["_weight_raw"] for r in regions)
     if total_weight <= 0:
@@ -475,9 +544,15 @@ def process(snapshot, weights, deviations, observed_years, yield_meta, price_met
         ),
         "weighting": (
             "Relative anomalies are combined with production weights: harvested acres "
-            "(2022 Census) times the state's fitted trend yield for this calendar year. "
-            "Actual 2022 production is not used as the weight because it embeds 2022's own "
-            "drought in the western states."
+            "(2022 Census) times THAT REGION's own fitted trend yield for this calendar "
+            "year. The two parts of a split state carry their own acres and their own "
+            "trend level and are weighted separately, so an irrigated stratum is weighted "
+            "at the yield irrigated corn actually reaches. Actual 2022 production is not "
+            "used as the weight because it embeds 2022's own drought in the western "
+            "states. Because these weights move with the run's year while the committed "
+            "stratum ratios were measured once, a split state's ratios are normalised "
+            "against these weights at run time rather than in the table -- see "
+            "stratum_rescaling and stratum_normalisation_divisor."
         ),
         "coverage": (
             f"The regions present are {round(coverage * 100, 2)}% of US corn-for-grain "

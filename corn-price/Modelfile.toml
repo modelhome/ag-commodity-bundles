@@ -248,7 +248,17 @@ description = "Whether this row is a whole state (\"all\") or one irrigated or r
 
 [outputs.schema.properties.regions.items.properties.stratum_dispersion_ratio]
 type = "number"
-description = "For a split state only: how much narrower or wider this part's year-to-year yield swings are than its whole state's. Below 1 for an irrigated part, above 1 for a rainfed one. Absent for a state that is not split."
+description = "For a split state only: how much narrower or wider this part's year-to-year yield swings are taken to be than its whole state's, as applied in this run. Below 1 for an irrigated part, above 1 for a rainfed one. Absent for a state that is not split."
+
+[outputs.schema.properties.regions.items.properties.stratum_dispersion_ratio_measured]
+type = "number"
+# The measurement, before the run-time normalisation. Shipped so the applied
+# figure can be checked against the data it came from.
+description = "For a split state only: the figure actually measured from USDA's published irrigated and non-irrigated yield series, before it was normalised. Absent for a state that is not split."
+
+[outputs.schema.properties.regions.items.properties.stratum_normalisation_divisor]
+type = "number"
+description = "For a split state only: what the measured figure was divided by so that splitting the state does not change how much it counts toward the national figure. It depends on this run's weights, so it moves slightly with the year. Absent for a state that is not split."
 
 [outputs.schema.properties.regions.items.properties.date]
 type = "string"
@@ -268,7 +278,7 @@ description = "The upstream model's own percentage, shown for comparison only."
 [outputs.schema.properties.regions.items.properties.yield_anomaly_real_pct]
 type = "number"
 unit = "%"
-description = "What that rank means against thirty years of this state's actual yields: the number that is actually used. An average season comes out at zero."
+description = "What that rank means against thirty years of this region's own observed yield distribution: the number that is actually used. An average season comes out at zero."
 
 [outputs.schema.properties.regions.items.properties.dispersion_ratio]
 type = "number"
@@ -278,16 +288,16 @@ description = "How much wider the upstream model's spread of yields is than this
 
 [outputs.schema.properties.regions.items.properties.production_weight]
 type = "number"
-description = "This state's share of the covered states' normal-year production, from 0 to 1."
+description = "This region's share of the covered regions' normal-year production, from 0 to 1. For one part of a split state, that part's own share -- its acres times its own trend yield."
 
 [outputs.schema.properties.regions.items.properties.contribution_pct]
 type = "number"
 unit = "%"
-description = "What this state contributed to the covered yield shock: its weight times its real anomaly."
+description = "What this region contributed to the covered yield shock: its weight times its real anomaly. The two parts of a split state contribute separately and sum to that state's contribution."
 
 [outputs.schema.properties.regions.items.properties.production_share_of_us]
 type = "number"
-description = "This state's share of all US corn-for-grain production, from 0 to 1."
+description = "This region's share of all US corn-for-grain production, from 0 to 1. The two parts of a split state sum to that state's share."
 
 [outputs.schema.properties.regions.items.properties.irrigated_share]
 type = "number"
@@ -311,7 +321,7 @@ description = "Harvested corn-for-grain acres, 2022 Census. For one part of a sp
 [outputs.schema.properties.regions.items.properties.trend_yield_bu_acre]
 type = "number"
 unit = "bu/acre"
-description = "What this state yields in a normal year at this year's trend."
+description = "What this region yields in a normal year at this year's trend. Each part of a split state has its own trend level, fitted on its own published years -- irrigated corn out-yields its state average by a wide margin in both split states."
 
 [outputs.schema.properties.assumptions]
 type = "object"
@@ -328,7 +338,7 @@ description = "How the upstream rank was put on a real-world scale, and how to a
 
 [outputs.schema.properties.assumptions.properties.weighting]
 type = "string"
-description = "How the states were combined, and why actual 2022 production was not used as the weight."
+description = "How the regions were combined -- each one's acres times its OWN fitted trend yield, so the two parts of a split state are weighted separately -- and why actual 2022 production was not used as the weight."
 
 [outputs.schema.properties.assumptions.properties.coverage]
 type = "string"
@@ -423,11 +433,11 @@ description = "Where the upstream model put this season among the last thirty."
 [outputs.schema.properties.rows.items.properties.yield_anomaly_real_pct]
 type = "number"
 unit = "%"
-description = "What that rank means against thirty years of this state's actual yields."
+description = "What that rank means against thirty years of this region's own observed yield distribution."
 
 [outputs.schema.properties.rows.items.properties.production_weight]
 type = "number"
-description = "This state's share of the covered states' normal-year production."
+description = "This region's share of the covered regions' normal-year production."
 
 [outputs.schema.properties.rows.items.properties.contribution_pct]
 type = "number"

@@ -260,45 +260,6 @@ def spread(deviations):
     return quantile(values, 0.9) - quantile(values, 0.1)
 
 
-def normalise_ratios(ratios, shares, state):
-    """Make a state's stratum ratios preserve the state's own aggregate swing.
-
-    The raw ratios are each measured against the state marginally: the
-    irrigated series' spread over the state's, and the rainfed series' over the
-    state's. Used as they are measured, they do NOT recombine to the state.
-    Production-weighting them gives 1.086 for Nebraska and 1.394 for Kansas, not
-    1.0, so splitting a state and adding its halves back up would hand it 8.6%
-    and 39.4% more influence over the national shock than treating it as one
-    region did.
-
-    That is an artifact, not a modelling choice. Marginal spreads add linearly
-    only when the two series move together, and they do not: over the published
-    years the irrigated and non-irrigated deviations correlate 0.31 in Nebraska
-    and 0.80 in Kansas. The real state series already embeds that imperfect
-    correlation and is therefore narrower than the weighted sum of its parts.
-    Assuming one shared shape throws the diversification away and overshoots.
-
-    The state series is the quantity this model has thirty trustworthy years of,
-    so it is the one to preserve: the ratios are divided by their own
-    production-weighted mean. The strata stay differentiated in exactly the
-    measured proportion -- the irrigated-to-rainfed ratio is untouched -- and
-    the state's contribution to the national figure is what its own observed
-    distribution says it should be.
-
-    The cost, stated because it is real: each stratum's spread no longer equals
-    its own measured marginal spread. Nebraska's irrigated stratum becomes
-    0.456 of the state rather than the measured 0.495. Per-stratum figures are
-    intermediate here and the national figure is the output, so preserving the
-    aggregate is the right trade -- but a consumer reading a single stratum row
-    should know its width is set by that choice.
-    """
-    total = sum(shares.values())
-    mean = sum(shares[k] / total * ratios[k] for k in ratios)
-    if mean <= 0:
-        raise SystemExit(f"{state}: stratum ratios average to {mean}; cannot normalise")
-    return {k: v / mean for k, v in ratios.items()}, mean
-
-
 def rescale_to_stratum(state_series, stratum_series, key, stratum):
     """How much wider a stratum's yield varies than its state's, and its own trend.
 
@@ -350,6 +311,10 @@ def rescale_to_stratum(state_series, stratum_series, key, stratum):
     intercept, slope, r2, rmse = fit_trend(years, [stratum_series[y] for y in years])
     detail = {
         "dispersion_ratio": round(ratio, 4),
+        # The observed, PUBLISHED deviations this ratio was measured from, kept
+        # so the measurement is auditable and so a historical case can be
+        # validated against real stratum ranks rather than reconstructed ones.
+        "observed_deviation_pct": {str(y): round(stratum_dev[y], 4) for y in overlap},
         "ratio_period": f"{overlap[0]}-{overlap[-1]}",
         "ratio_years": len(overlap),
         "stratum_spread_p10_p90_pct": round(stratum_spread, 2),
@@ -399,21 +364,22 @@ def main():
     for state, keys in by_split_state.items():
         if len(keys) < 2:
             raise SystemExit(
-                f"{state}: only {keys} present. A split state's ratios are normalised "
-                f"against each other, so both strata must be in the region set."
+                f"{state}: only {keys} present. A split state's two strata are normalised "
+                f"against each other at run time, so both must be in the region set."
             )
-        raw = {k: measured[k][0] for k in keys}
-        normalised, mean = normalise_ratios(raw, {k: shares[k] for k in keys}, state)
-        ratios.update(normalised)
-        log(f"{state}: raw ratios " + ", ".join(f"{k} x{raw[k]:.3f}" for k in keys)
-            + f" average to {mean:.3f}; normalised to "
-            + ", ".join(f"x{normalised[k]:.3f}" for k in keys))
         for k in keys:
-            measured[k][3].update({
-                "dispersion_ratio_measured": round(raw[k], 4),
-                "dispersion_ratio": round(normalised[k], 4),
-                "state_normalisation_divisor": round(mean, 4),
-            })
+            ratios[k] = measured[k][0]
+        # Informational only: what the divisor would be on census production
+        # shares. The runner computes the one it actually uses from its own
+        # aggregation weights, which are acres times each region's fitted trend
+        # yield and therefore move with the run year. See normalise_ratios.
+        share_basis = sum(shares[k] / sum(shares[j] for j in keys) * ratios[k]
+                          for k in keys)
+        log(f"{state}: measured ratios " + ", ".join(f"{k} x{ratios[k]:.3f}" for k in keys)
+            + f"; these average to {share_basis:.3f} on production shares, so the runner "
+              f"normalises them against its own weights at run time")
+        for k in keys:
+            measured[k][3]["divisor_on_production_shares"] = round(share_basis, 4)
 
     rows = []
     trends = {}
