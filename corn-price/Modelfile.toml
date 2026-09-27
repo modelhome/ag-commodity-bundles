@@ -36,9 +36,13 @@ cpu = "0.5"
 # There is deliberately no `default` here. The convention in these bundles is
 # that a schema default is a runnable "Example to paste", and a runnable example
 # for this model is a full per-region snapshot including the upstream model's
-# baseline metadata -- too large to paste. This model is meant to be run after
-# the yield model in a flow, which supplies the whole input.
+# baseline metadata -- too large to paste. It ships as `example_file` instead:
+# sample_input.json, which Model Home offers under "Use example data?" as a link
+# to the file, and checks that it fits this schema whenever the model is saved.
+# This model is meant to be run after the yield model in a flow, which supplies
+# the whole input.
 name = "corn_yield_snapshot"
+example_file = "sample_input.json"
 description = "The per-region yield table from the US Corn Yield model. In a flow this is wired straight from that model's output; nothing else needs filling in."
 
 [inputs.schema]
